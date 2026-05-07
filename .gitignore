@@ -1,0 +1,6 @@
+# 项目排除路径
+/ai-service/target/
+/alert-service/target/
+/common/target/
+/gateway/target/
+/log-service/target/
