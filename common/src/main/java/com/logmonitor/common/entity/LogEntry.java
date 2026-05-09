@@ -1,5 +1,6 @@
 package com.logmonitor.common.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -23,4 +24,15 @@ public class LogEntry extends BaseEntity {
     private String content;
     private String threadName;
     private String className;
+    private String filePath;
+    // getter和setter方法
+    public String getFilePath() {
+        return filePath;
+    }
+
+    public void setFilePath(String filePath) {
+        this.filePath = filePath;
+    }
+    @TableField(exist = false)
+    private LocalDateTime updateTime;
 }

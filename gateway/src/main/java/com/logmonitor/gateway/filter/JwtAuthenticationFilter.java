@@ -37,6 +37,35 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
         if (path.startsWith("/ws/")) {
             return chain.filter(exchange);
         }
+        // ✅ 新增：白名单路径检查（添加在WebSocket检查之后）
+        String[] whiteListPaths = {
+                "/api/log/entries",
+                "/api/log/entries/**",
+                "/api/log/**",
+                "/actuator/**",
+                "/swagger-ui/**",
+                "/v3/api-docs/**",
+                "/h2-console/**",
+                "/api/auth/login"
+        };
+
+        boolean isWhiteListed = false;
+        for (String whiteListPath : whiteListPaths) {
+            if (whiteListPath.endsWith("/**")) {
+                String prefix = whiteListPath.substring(0, whiteListPath.length() - 3);
+                if (path.startsWith(prefix)) {
+                    isWhiteListed = true;
+                    break;
+                }
+            } else if (path.equals(whiteListPath)) {
+                isWhiteListed = true;
+                break;
+            }
+        }
+
+        if (isWhiteListed) {
+            return chain.filter(exchange);
+        }
 
         String authHeader = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {

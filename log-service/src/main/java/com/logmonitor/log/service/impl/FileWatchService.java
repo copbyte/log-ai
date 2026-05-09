@@ -14,6 +14,8 @@ import java.io.RandomAccessFile;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -31,6 +33,7 @@ public class FileWatchService {
     private final LogEntryService logEntryService;
     private final LogEntryProducer logEntryProducer;
     private final LogWebSocketHandler webSocketHandler;
+    private final LogBatchProcessor logBatchProcessor;
     private WatchService watchService;
     private Path watchPath;
 
@@ -39,10 +42,12 @@ public class FileWatchService {
 
     public FileWatchService(LogEntryService logEntryService,
                             LogEntryProducer logEntryProducer,
-                            LogWebSocketHandler webSocketHandler) {
+                            LogWebSocketHandler webSocketHandler,
+                            LogBatchProcessor logBatchProcessor) {
         this.logEntryService = logEntryService;
         this.logEntryProducer = logEntryProducer;
         this.webSocketHandler = webSocketHandler;
+        this.logBatchProcessor = logBatchProcessor;
     }
 
     public void startWatching(String directory) throws IOException {
@@ -68,6 +73,9 @@ public class FileWatchService {
             return;
         }
 
+        // 收集本轮所有待处理的日志条目，用于MyBatis-Plus批量插入
+        List<LogEntry> batch = new ArrayList<>();
+
         for (WatchEvent<?> event : key.pollEvents()) {
             WatchEvent.Kind<?> kind = event.kind();
             if (kind == StandardWatchEventKinds.OVERFLOW) {
@@ -86,16 +94,38 @@ public class FileWatchService {
                     fileOffsets.put(filePath.toString(), 0L);
                 }
 
-                readNewLines(filePath);
+                // 读取新行并收集到批次列表中，不在此处持久化
+                readNewLines(filePath, batch);
             } catch (Exception e) {
                 log.error("Error processing file: {}", filePath, e);
             }
         }
 
         key.reset();
+
+        // 批量持久化：使用MyBatis-Plus的saveBatch一次性写入数据库，大幅减少数据库交互次数
+        if (!batch.isEmpty()) {
+            try {
+                logEntryService.saveBatch(batch, 100);
+                log.info("批量保存{}条日志完成", batch.size());
+                // 异步处理WebSocket广播和RabbitMQ发送，不阻塞下一次轮询
+                logBatchProcessor.processBatchAsync(batch);
+            } catch (Exception e) {
+                log.error("批量保存日志失败，共{}条", batch.size(), e);
+            }
+        }
     }
 
-    private void readNewLines(Path filePath) throws IOException {
+    /**
+     * 读取文件新增的行，解析后放入批次缓冲区
+     * <p>
+     * 仅做解析和收集，不做任何持久化或IO操作，
+     * 解析结果统一由poll()方法批量处理。
+     *
+     * @param filePath 被监控的日志文件路径
+     * @param buffer   日志条目收集缓冲区
+     */
+    private void readNewLines(Path filePath, List<LogEntry> buffer) throws IOException {
         String absolutePath = filePath.toAbsolutePath().toString();
         long lastOffset = fileOffsets.getOrDefault(absolutePath, 0L);
 
@@ -110,18 +140,34 @@ public class FileWatchService {
 
             raf.seek(lastOffset);
             String line;
+            String fileName = filePath.getFileName().toString();
+            String pathStr = filePath.toString();
             while ((line = raf.readLine()) != null) {
                 line = new String(line.getBytes("ISO-8859-1"), "UTF-8");
-                processLine(filePath.getFileName().toString(), line);
+                LogEntry entry = buildEntry(fileName, line, pathStr);
+                if (entry != null) {
+                    buffer.add(entry);
+                }
             }
 
             fileOffsets.put(absolutePath, raf.getFilePointer());
         }
     }
 
-    private void processLine(String fileName, String line) {
+    /**
+     * 解析日志行并构建LogEntry对象
+     * <p>
+     * 仅负责解析和构建，不做持久化或发送操作。
+     * 将解析与IO处理分离，便于批量收集后统一处理。
+     *
+     * @param fileName 日志文件名
+     * @param line     日志行原始内容
+     * @param filePath 日志文件完整路径
+     * @return 解析后的LogEntry对象，空行则返回null
+     */
+    private LogEntry buildEntry(String fileName, String line, String filePath) {
         if (line.isBlank()) {
-            return;
+            return null;
         }
 
         LogEntry entry = parseLine(fileName, line);
@@ -129,14 +175,8 @@ public class FileWatchService {
             entry = fallbackParse(fileName, line);
         }
 
-        try {
-            logEntryService.save(entry);
-            webSocketHandler.broadcastLogEntry(entry);
-            logEntryProducer.send(entry);
-            log.debug("Processed log: {} [{}] {}", fileName, entry.getLogLevel(), entry.getContent());
-        } catch (Exception e) {
-            log.error("Failed to process log line: {}", line, e);
-        }
+        entry.setFilePath(filePath);
+        return entry;
     }
 
     private LogEntry parseLine(String fileName, String line) {

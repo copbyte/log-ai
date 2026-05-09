@@ -10,8 +10,13 @@ import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-
+/**
+ * AI分析消息消费者
+ * <p>
+ * 消费失败时由Spring Retry拦截器自动重试（最多3次，指数退避：1s→2s→4s），
+ * 重试耗尽后消息进入死信队列，由DlxMessageHandler统一处理。
+ * 消费者自身不捕获异常，所有异常上抛给容器层面的重试拦截器。
+ */
 @Slf4j
 @Component
 public class LogEntryConsumer {
@@ -22,22 +27,20 @@ public class LogEntryConsumer {
         this.aiAnalysisService = aiAnalysisService;
     }
 
+    /**
+     * 消费日志条目并执行AI分析
+     * <p>
+     * 使用手动确认模式（acknowledge-mode: manual），处理成功后显式ack。
+     * 任何异常（包括业务异常和IO异常）上抛给Spring Retry拦截器处理，
+     * 避免在消费者中手动nack导致的无限制requeue循环。
+     */
     @RabbitListener(queues = "log.monitor.ai.queue")
-    public void onMessage(String message, Channel channel, @Header(AmqpHeaders.DELIVERY_TAG) long tag) {
-        try {
-            LogEntry logEntry = JSON.parseObject(message, LogEntry.class);
-            log.debug("Received log entry for AI analysis: id={}", logEntry.getId());
+    public void onMessage(String message, Channel channel, @Header(AmqpHeaders.DELIVERY_TAG) long tag) throws Exception {
+        LogEntry logEntry = JSON.parseObject(message, LogEntry.class);
+        log.debug("Received log entry for AI analysis: id={}", logEntry.getId());
 
-            aiAnalysisService.analyze(logEntry);
+        aiAnalysisService.analyze(logEntry);
 
-            channel.basicAck(tag, false);
-        } catch (Exception e) {
-            log.error("Failed to process message for AI analysis", e);
-            try {
-                channel.basicNack(tag, false, true);
-            } catch (IOException ioException) {
-                log.error("Failed to nack message", ioException);
-            }
-        }
+        channel.basicAck(tag, false);
     }
 }
