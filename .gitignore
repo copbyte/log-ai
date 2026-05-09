@@ -4,3 +4,5 @@
 /common/target/
 /gateway/target/
 /log-service/target/
+/.claude
+.gitignore

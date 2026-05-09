@@ -5,10 +5,10 @@ spring:
   application:
     name: ai-service
   datasource:
-    url: jdbc:h2:mem:log_monitor;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: "123456"
   data:
     redis:
       host: localhost
@@ -18,11 +18,22 @@ spring:
   rabbitmq:
     host: localhost
     port: 5672
-    username: guest
-    password: guest
+    username: admin
+    password: admin
     listener:
       simple:
         acknowledge-mode: manual
+        # 每次只预取1条消息，避免AI分析耗时导致消息在消费者缓冲区堆积
+        prefetch: 1
+        retry:
+          # 启用Spring Retry拦截器，由容器层面处理重试，消费者只需关注业务逻辑
+          enabled: true
+          # 最多重试3次
+          max-attempts: 3
+          # 首次重试间隔1秒，后续按2倍递增（1s → 2s → 4s），最大间隔10秒
+          initial-interval: 1000ms
+          max-interval: 10000ms
+          multiplier: 2
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
@@ -37,3 +48,5 @@ mybatis-plus:
 logging:
   level:
     com.logmonitor: debug
+  config: classpath:logback.xml
+

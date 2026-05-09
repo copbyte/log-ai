@@ -18,8 +18,8 @@ public class LogEntryController {
     }
 
     @GetMapping("/entries")
-    public Result<IPage<LogEntry>> page(@RequestParam(defaultValue = "1") int page,
-                                        @RequestParam(defaultValue = "20") int size) {
+    public Result<IPage<LogEntry>> page(@RequestParam(value = "page", defaultValue = "1") int page,
+                                        @RequestParam(value = "size", defaultValue = "20") int size) {
         return Result.success(logEntryService.page(new Page<>(page, size)));
     }
 
