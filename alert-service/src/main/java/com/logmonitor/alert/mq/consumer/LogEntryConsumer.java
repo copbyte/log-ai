@@ -12,6 +12,7 @@ import com.rabbitmq.client.Channel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
@@ -32,6 +33,12 @@ public class LogEntryConsumer {
     private final AlertRecordService alertRecordService;
     private final NotificationService notificationService;
     private final AlertWebSocketHandler webSocketHandler;
+    
+    @Value("${mq.consumer.alert.enabled:true}")
+    private boolean alertConsumerEnabled;
+    
+    @Value("${mq.consumer.alert.fake-consume:false}")
+    private boolean alertFakeConsume;
 
     public LogEntryConsumer(AlertRuleService alertRuleService,
                             AlertRecordService alertRecordService,
@@ -54,17 +61,29 @@ public class LogEntryConsumer {
     @RabbitListener(queues = "log.monitor.alert.queue")
     public void onMessage(String message, Channel channel, @Header(AmqpHeaders.DELIVERY_TAG) long tag) throws Exception {
         LogEntry logEntry = JSON.parseObject(message, LogEntry.class);
-        log.debug("Received log entry for alert check: id={}", logEntry.getId());
+
+        if (!alertConsumerEnabled) {
+            channel.basicAck(tag, false);
+            return;
+        }
+
+        if (alertFakeConsume) {
+            channel.basicAck(tag, false);
+            return;
+        }
 
         List<AlertRule> rules = alertRuleService.listEnabled();
         for (AlertRule rule : rules) {
             if (alertRuleService.matchRule(rule, logEntry)) {
                 AlertRecord record = AlertRecord.builder()
                         .ruleId(rule.getId())
+                        .ruleName(rule.getRuleName())
                         .logEntryId(logEntry.getId())
+                        .logLevel(logEntry.getLogLevel())
                         .alertContent(String.format("Rule [%s] matched: %s [%s] %s",
                                 rule.getRuleName(), logEntry.getFileName(),
                                 logEntry.getLogLevel(), logEntry.getContent()))
+                        .notifyType(rule.getNotifyType().name())
                         .notifyStatus("PENDING")
                         .build();
 

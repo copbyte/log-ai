@@ -11,4 +11,6 @@ public interface AlertRuleService extends IService<AlertRule> {
     List<AlertRule> listEnabled();
 
     boolean matchRule(AlertRule rule, LogEntry logEntry);
+
+    void refreshCache();
 }

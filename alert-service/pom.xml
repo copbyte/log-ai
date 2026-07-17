@@ -70,7 +70,7 @@
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId> <!-- 注意：这里是 spring-boot3 -->
-            <version>3.5.10</version> <!-- 请使用最新版本 -->
+            <version>3.5.7</version> <!-- 请使用最新版本 -->
         </dependency>
 
     </dependencies>

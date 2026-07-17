@@ -8,6 +8,7 @@ import com.logmonitor.ai.service.AiAnalysisService;
 import com.logmonitor.ai.service.AiApiClient;
 import com.logmonitor.ai.service.PromptService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -28,22 +29,24 @@ public class AiAnalysisServiceImpl extends ServiceImpl<AiAnalysisResultMapper, A
 
     public AiAnalysisServiceImpl(AiApiClient aiApiClient,
                                   PromptService promptService,
-                                  StringRedisTemplate redisTemplate) {
+                                  ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.aiApiClient = aiApiClient;
         this.promptService = promptService;
-        this.redisTemplate = redisTemplate;
+        this.redisTemplate = redisTemplateProvider.getIfAvailable();
     }
 
     @Override
-    public AiAnalysisResult analyze(LogEntry logEntry) {
+    public AiAnalysisResult analyze(LogEntry logEntry, boolean force) {
         String contentHash = hashContent(logEntry);
         String cacheKey = "log:monitor:ai:analysis:" + contentHash;
 
-        // Check Redis cache
-        String cached = redisTemplate.opsForValue().get(cacheKey);
-        if (cached != null) {
-            log.debug("Cache hit for content hash: {}", contentHash);
-            return null; // Already analyzed recently
+        // 非强制模式下检查缓存，避免重复分析消耗token
+        if (!force && redisTemplate != null) {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                log.debug("Cache hit for content hash: {}", contentHash);
+                return null;
+            }
         }
 
         String prompt = promptService.buildPrompt(logEntry);
@@ -60,8 +63,10 @@ public class AiAnalysisServiceImpl extends ServiceImpl<AiAnalysisResultMapper, A
 
         save(result);
 
-        // Cache for 30 minutes
-        redisTemplate.opsForValue().set(cacheKey, result.getId().toString(), 30, TimeUnit.MINUTES);
+        // 有Redis时缓存30分钟，避免重复分析
+        if (redisTemplate != null) {
+            redisTemplate.opsForValue().set(cacheKey, result.getId().toString(), 30, TimeUnit.MINUTES);
+        }
 
         log.info("AI analysis completed: logEntryId={}, resultId={}", logEntry.getId(), result.getId());
         return result;
