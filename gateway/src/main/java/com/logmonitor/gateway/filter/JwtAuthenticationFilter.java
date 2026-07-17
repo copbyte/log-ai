@@ -39,9 +39,9 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
         }
         // ✅ 新增：白名单路径检查（添加在WebSocket检查之后）
         String[] whiteListPaths = {
-                "/api/log/entries",
-                "/api/log/entries/**",
                 "/api/log/**",
+                "/api/ai/**",
+                "/api/alert/**",
                 "/actuator/**",
                 "/swagger-ui/**",
                 "/v3/api-docs/**",

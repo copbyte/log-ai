@@ -51,6 +51,5 @@ public class LogBatchProcessor {
                 log.warn("RabbitMQ发送失败: entryId={}", entry.getId(), e);
             }
         }
-        log.debug("异步批处理完成，处理{}条日志", entries.size());
     }
 }

@@ -1,29 +1,43 @@
 package com.logmonitor.alert.config;
 
-import org.springframework.amqp.core.AcknowledgeMode;
-import org.springframework.amqp.core.Queue;
-import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
-import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.core.*;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @Configuration
 public class RabbitMqConfig {
 
- //    //TODO 如果第一次弹出启动此服务 需将注释放开一次，已经启动过log-service服务请忽略
-//    public static final String LOG_MONITOR_QUEUE = "log.monitor.alert.queue";
-//
-//    @Bean
-//    public Queue logMonitorAlertQueue() {
-//        return new Queue(LOG_MONITOR_QUEUE, true);
-//    }
+    public static final String ALERT_QUEUE = "log.monitor.alert.queue";
+    private static final String LOG_EXCHANGE = "log.monitor.log.exchange";
+    private static final String DLX_EXCHANGE = "log.monitor.dlx.exchange";
+
+    /**
+     * 声明日志 Exchange（启动顺序无关——即使 log-service 未先启动，Exchange 也存在）
+     */
     @Bean
-    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory) {
-        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
-        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-        factory.setPrefetchCount(1);
-        return factory;
+    public TopicExchange logMonitorExchange() {
+        return new TopicExchange(LOG_EXCHANGE);
+    }
+
+    /**
+     * 告警队列：持久化，绑定死信交换机
+     * x-message-ttl: 消息5分钟后过期
+     * x-max-length: 队列最多积压10万条
+     */
+    @Bean
+    public Queue alertQueue() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", DLX_EXCHANGE);
+        args.put("x-message-ttl", 300_000);
+        args.put("x-max-length", 100_000);
+        return new Queue(ALERT_QUEUE, true, false, false, args);
+    }
+
+    @Bean
+    public Binding alertQueueBinding() {
+        return BindingBuilder.bind(alertQueue()).to(logMonitorExchange()).with("log.new");
     }
 }

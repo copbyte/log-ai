@@ -15,18 +15,21 @@ import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class FileWatchService {
 
     private static final Pattern LOG_PATTERN = Pattern.compile(
-            "^(\\S+)\\s+(\\S+)\\s+\\[([^\\]]+)\\]\\s+(\\S+)\\s+(\\S+)\\s+-\\s+(.*)$"
+            "^(\\S+\\s+\\S+)\\s+(\\S+)\\s+\\[([^\\]]+)\\]\\s+(\\S+)\\s+-\\s+(.*)$"
     );
 
     private final Map<String, Long> fileOffsets = new ConcurrentHashMap<>();
@@ -39,6 +42,27 @@ public class FileWatchService {
 
     @Value("${log.watch.poll-interval-ms:500}")
     private long pollIntervalMs;
+
+    /** 是否过滤监控平台自身组件的日志，单部署开启避免反馈循环，多部署可关闭 */
+    @Value("${log.watch.filter-self-logs:true}")
+    private boolean filterSelfLogs;
+
+    /** 监控平台自身组件的全限定类名（逗号分隔），其产生的日志将不会被二次采集 */
+    @Value("${log.watch.self-log-classes:com.logmonitor.log.mq.producer.LogEntryProducer,com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService,com.logmonitor.log.mq.consumer.DlxMessageHandler,com.logmonitor.log.websocket.LogWebSocketHandler}")
+    private String selfLogClasses;
+
+    private volatile Set<String> selfLogClassSet;
+
+    private Set<String> getSelfLogClassSet() {
+        if (selfLogClassSet == null) {
+            selfLogClassSet = Collections.unmodifiableSet(
+                    java.util.Arrays.stream(selfLogClasses.split(","))
+                            .map(String::trim)
+                            .filter(s -> !s.isEmpty())
+                            .collect(Collectors.toSet()));
+        }
+        return selfLogClassSet;
+    }
 
     public FileWatchService(LogEntryService logEntryService,
                             LogEntryProducer logEntryProducer,
@@ -107,7 +131,6 @@ public class FileWatchService {
         if (!batch.isEmpty()) {
             try {
                 logEntryService.saveBatch(batch, 100);
-                log.info("批量保存{}条日志完成", batch.size());
                 // 异步处理WebSocket广播和RabbitMQ发送，不阻塞下一次轮询
                 logBatchProcessor.processBatchAsync(batch);
             } catch (Exception e) {
@@ -146,6 +169,9 @@ public class FileWatchService {
                 line = new String(line.getBytes("ISO-8859-1"), "UTF-8");
                 LogEntry entry = buildEntry(fileName, line, pathStr);
                 if (entry != null) {
+                    if (filterSelfLogs && isSelfLog(entry)) {
+                        continue;
+                    }
                     buffer.add(entry);
                 }
             }
@@ -190,7 +216,7 @@ public class FileWatchService {
                 .logLevel(m.group(2))
                 .threadName(m.group(3))
                 .className(m.group(4))
-                .content(m.group(6))
+                .content(m.group(5))
                 .build();
     }
 
@@ -208,7 +234,7 @@ public class FileWatchService {
                 .logTime(LocalDateTime.now())
                 .logLevel(logLevel)
                 .content(line)
-                .threadName(Thread.currentThread().getName())
+                .threadName(null)
                 .build();
     }
 
@@ -222,5 +248,13 @@ public class FileWatchService {
                 return LocalDateTime.now();
             }
         }
+    }
+
+    /**
+     * 判断日志条目是否来自监控平台自身组件，防止单部署下的反馈循环
+     */
+    private boolean isSelfLog(LogEntry entry) {
+        String className = entry.getClassName();
+        return className != null && getSelfLogClassSet().contains(className);
     }
 }

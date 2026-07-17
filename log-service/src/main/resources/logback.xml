@@ -38,5 +38,5 @@
     </root>
 
     <!-- 特定包的日志级别 -->
-    <logger name="com.logmonitor.log" level="DEBUG"/>
+    <logger name="com.logmonitor.log" level="INFO"/>
 </configuration>

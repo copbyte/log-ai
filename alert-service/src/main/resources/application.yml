@@ -35,7 +35,7 @@ spring:
       simple:
         acknowledge-mode: manual
         # 每次只预取1条消息，保证消息处理的公平性
-        prefetch: 1
+        prefetch: 50
         retry:
           # 启用Spring Retry拦截器，由容器层面处理重试，消费者只需关注业务逻辑
           enabled: true
@@ -46,6 +46,16 @@ spring:
           max-interval: 10000ms
           multiplier: 2
 
+# MQ消费控制配置
+mq:
+  consumer:
+    ai:
+      enabled: true  # 设置为false时禁用真实AI分析消费
+      fake-consume: false  # 设置为true时启用假消费模式
+    alert:
+      enabled: true  # 设置为false时禁用真实告警消费
+      fake-consume: false  # 设置为true时启用假消费模式
+
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   global-config:
@@ -54,8 +64,8 @@ mybatis-plus:
       table-underline: true
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
 
 logging:
   level:
-    com.logmonitor: debug
+    com.logmonitor: info

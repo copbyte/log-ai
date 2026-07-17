@@ -4,9 +4,9 @@ import com.alibaba.fastjson2.JSON;
 import com.logmonitor.common.entity.LogEntry;
 import com.logmonitor.ai.service.AiAnalysisService;
 import com.rabbitmq.client.Channel;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
@@ -17,11 +17,16 @@ import org.springframework.stereotype.Component;
  * 重试耗尽后消息进入死信队列，由DlxMessageHandler统一处理。
  * 消费者自身不捕获异常，所有异常上抛给容器层面的重试拦截器。
  */
-@Slf4j
 @Component
 public class LogEntryConsumer {
 
     private final AiAnalysisService aiAnalysisService;
+    
+    @Value("${mq.consumer.ai.enabled:false}")
+    private boolean aiConsumerEnabled;
+    
+    @Value("${mq.consumer.ai.fake-consume:false}")
+    private boolean aiFakeConsume;
 
     public LogEntryConsumer(AiAnalysisService aiAnalysisService) {
         this.aiAnalysisService = aiAnalysisService;
@@ -37,9 +42,18 @@ public class LogEntryConsumer {
     @RabbitListener(queues = "log.monitor.ai.queue")
     public void onMessage(String message, Channel channel, @Header(AmqpHeaders.DELIVERY_TAG) long tag) throws Exception {
         LogEntry logEntry = JSON.parseObject(message, LogEntry.class);
-        log.debug("Received log entry for AI analysis: id={}", logEntry.getId());
 
-        aiAnalysisService.analyze(logEntry);
+        if (!aiConsumerEnabled) {
+            channel.basicAck(tag, false);
+            return;
+        }
+
+        if (aiFakeConsume) {
+            channel.basicAck(tag, false);
+            return;
+        }
+
+        aiAnalysisService.analyze(logEntry, false);
 
         channel.basicAck(tag, false);
     }

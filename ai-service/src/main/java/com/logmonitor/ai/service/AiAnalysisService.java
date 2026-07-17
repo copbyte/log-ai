@@ -6,5 +6,5 @@ import com.logmonitor.common.entity.LogEntry;
 
 public interface AiAnalysisService extends IService<AiAnalysisResult> {
 
-    AiAnalysisResult analyze(LogEntry logEntry);
+    AiAnalysisResult analyze(LogEntry logEntry, boolean force);
 }

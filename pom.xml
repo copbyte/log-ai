@@ -17,6 +17,7 @@
         <module>log-service</module>
         <module>ai-service</module>
         <module>alert-service</module>
+        <module>log-monitor-starter</module>
     </modules>
 
     <properties>

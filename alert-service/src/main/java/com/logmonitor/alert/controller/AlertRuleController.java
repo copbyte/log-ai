@@ -19,32 +19,35 @@ public class AlertRuleController {
     }
 
     @GetMapping("/rules")
-    public Result<IPage<AlertRule>> page(@RequestParam(defaultValue = "1") int page,
-                                          @RequestParam(defaultValue = "20") int size) {
+    public Result<IPage<AlertRule>> page(@RequestParam(name = "page", defaultValue = "1") int page,
+                                          @RequestParam(name = "size", defaultValue = "20") int size) {
         return Result.success(alertRuleService.page(new Page<>(page, size)));
     }
 
     @GetMapping("/rules/{id}")
-    public Result<AlertRule> getById(@PathVariable Long id) {
+    public Result<AlertRule> getById(@PathVariable("id") Long id) {
         return Result.success(alertRuleService.getById(id));
     }
 
     @PostMapping("/rules")
     public Result<AlertRule> create(@Valid @RequestBody AlertRule rule) {
         alertRuleService.save(rule);
+        alertRuleService.refreshCache();
         return Result.success(rule);
     }
 
     @PutMapping("/rules/{id}")
-    public Result<AlertRule> update(@PathVariable Long id, @Valid @RequestBody AlertRule rule) {
+    public Result<AlertRule> update(@PathVariable("id") Long id, @Valid @RequestBody AlertRule rule) {
         rule.setId(id);
         alertRuleService.updateById(rule);
+        alertRuleService.refreshCache();
         return Result.success(rule);
     }
 
     @DeleteMapping("/rules/{id}")
-    public Result<Void> delete(@PathVariable Long id) {
+    public Result<Void> delete(@PathVariable("id") Long id) {
         alertRuleService.removeById(id);
+        alertRuleService.refreshCache();
         return Result.success();
     }
 }
