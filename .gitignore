@@ -17,6 +17,8 @@
 # 前端
 /log-ai-frontend/node_modules/
 /log-ai-frontend/dist/
+/log-ai-frontend/.vite/
+*.tsbuildinfo
 
 # 操作系统
 .DS_Store

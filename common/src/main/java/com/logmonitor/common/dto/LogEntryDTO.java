@@ -14,5 +14,8 @@ public class LogEntryDTO {
     private String content;
     private String threadName;
     private String className;
+    private String traceId;
+    private String serviceName;
+    private String logSource;
     private LocalDateTime createTime;
 }

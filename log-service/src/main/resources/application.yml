@@ -13,21 +13,6 @@ spring:
 #    console:
 #      enabled: true
 #      path: /h2-console
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: admin
-    password: admin
-    # 生产者确认：CORRELATED模式，每条消息异步回调确认是否到达Broker
-    publisher-confirm-type: correlated
-    # 开启mandatory：无法路由到队列的消息触发ReturnCallback而非静默丢弃
-    template:
-      mandatory: true
-    listener:
-      simple:
-        acknowledge-mode: manual
-        # 每次只预取1条消息，防止消息在消费者缓冲区堆积超时
-        prefetch: 50
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
@@ -53,4 +38,4 @@ log:
     # 单部署建议开启：过滤监控平台自身组件日志，防止反馈循环
     # 多部署（监控与被监控分离）可关闭，完整采集自身日志
     filter-self-logs: true
-    self-log-classes: com.logmonitor.log.mq.producer.LogEntryProducer,com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService,com.logmonitor.log.mq.consumer.DlxMessageHandler,com.logmonitor.log.websocket.LogWebSocketHandler
+    self-log-classes: com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService

@@ -1,9 +1,7 @@
 package com.logmonitor.log.service.impl;
 
 import com.logmonitor.common.entity.LogEntry;
-import com.logmonitor.log.mq.producer.LogEntryProducer;
 import com.logmonitor.log.service.LogEntryService;
-import com.logmonitor.log.websocket.LogWebSocketHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -32,10 +30,14 @@ public class FileWatchService {
             "^(\\S+\\s+\\S+)\\s+(\\S+)\\s+\\[([^\\]]+)\\]\\s+(\\S+)\\s+-\\s+(.*)$"
     );
 
+    /** 从日志内容中提取 TraceID（兼容 SkyWalking TID、通用 traceId 格式） */
+    private static final Pattern TRACE_ID_PATTERN = Pattern.compile(
+            "(?:trace[_-]?id|tid)[:\\s]*[\\[\\(]?([a-zA-Z0-9.\\-]{8,64})[\\]\\)]?",
+            Pattern.CASE_INSENSITIVE
+    );
+
     private final Map<String, Long> fileOffsets = new ConcurrentHashMap<>();
     private final LogEntryService logEntryService;
-    private final LogEntryProducer logEntryProducer;
-    private final LogWebSocketHandler webSocketHandler;
     private final LogBatchProcessor logBatchProcessor;
     private WatchService watchService;
     private Path watchPath;
@@ -48,7 +50,7 @@ public class FileWatchService {
     private boolean filterSelfLogs;
 
     /** 监控平台自身组件的全限定类名（逗号分隔），其产生的日志将不会被二次采集 */
-    @Value("${log.watch.self-log-classes:com.logmonitor.log.mq.producer.LogEntryProducer,com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService,com.logmonitor.log.mq.consumer.DlxMessageHandler,com.logmonitor.log.websocket.LogWebSocketHandler}")
+    @Value("${log.watch.self-log-classes:com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService}")
     private String selfLogClasses;
 
     private volatile Set<String> selfLogClassSet;
@@ -65,12 +67,8 @@ public class FileWatchService {
     }
 
     public FileWatchService(LogEntryService logEntryService,
-                            LogEntryProducer logEntryProducer,
-                            LogWebSocketHandler webSocketHandler,
                             LogBatchProcessor logBatchProcessor) {
         this.logEntryService = logEntryService;
-        this.logEntryProducer = logEntryProducer;
-        this.webSocketHandler = webSocketHandler;
         this.logBatchProcessor = logBatchProcessor;
     }
 
@@ -131,7 +129,7 @@ public class FileWatchService {
         if (!batch.isEmpty()) {
             try {
                 logEntryService.saveBatch(batch, 100);
-                // 异步处理WebSocket广播和RabbitMQ发送，不阻塞下一次轮询
+                // 异步处理批次后续逻辑，不阻塞下一次轮询
                 logBatchProcessor.processBatchAsync(batch);
             } catch (Exception e) {
                 log.error("批量保存日志失败，共{}条", batch.size(), e);
@@ -202,6 +200,9 @@ public class FileWatchService {
         }
 
         entry.setFilePath(filePath);
+        entry.setLogSource("FILE");
+        entry.setTraceId(extractTraceId(entry.getContent()));
+        entry.setServiceName(extractServiceName(fileName));
         return entry;
     }
 
@@ -248,6 +249,23 @@ public class FileWatchService {
                 return LocalDateTime.now();
             }
         }
+    }
+
+    /** 从日志内容中提取 TraceID */
+    private String extractTraceId(String content) {
+        if (content == null) {
+            return null;
+        }
+        Matcher m = TRACE_ID_PATTERN.matcher(content);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** 从文件名推断服务名（去掉 .log 后缀） */
+    private String extractServiceName(String fileName) {
+        if (fileName == null) {
+            return null;
+        }
+        return fileName.endsWith(".log") ? fileName.substring(0, fileName.length() - 4) : fileName;
     }
 
     /**

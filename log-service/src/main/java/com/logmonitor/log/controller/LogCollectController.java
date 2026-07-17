@@ -2,7 +2,7 @@ package com.logmonitor.log.controller;
 
 import com.logmonitor.common.entity.LogEntry;
 import com.logmonitor.common.result.Result;
-import com.logmonitor.log.mq.producer.LogEntryProducer;
+import com.logmonitor.log.service.LogEntryService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -14,20 +14,18 @@ import java.util.List;
 @RequestMapping("/api/log")
 public class LogCollectController {
 
-    private final LogEntryProducer logEntryProducer;
+    private final LogEntryService logEntryService;
 
-    public LogCollectController(LogEntryProducer logEntryProducer) {
-        this.logEntryProducer = logEntryProducer;
+    public LogCollectController(LogEntryService logEntryService) {
+        this.logEntryService = logEntryService;
     }
 
     /**
-     * 批量接收其他服务上报的日志，直接转发到 MQ
+     * 批量接收其他服务上报的日志，直接入库
      */
     @PostMapping("/collect")
     public Result<Void> collect(@RequestBody List<LogEntry> entries) {
-        for (LogEntry entry : entries) {
-            logEntryProducer.send(entry);
-        }
+        logEntryService.saveBatch(entries, 100);
         return Result.success();
     }
 }

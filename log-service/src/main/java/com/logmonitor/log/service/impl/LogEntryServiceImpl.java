@@ -11,10 +11,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 public class LogEntryServiceImpl extends ServiceImpl<LogEntryMapper, LogEntry> implements LogEntryService {
 
+    @Override
     public IPage<LogEntry> pageWithFilters(Page<LogEntry> page,
                                            String logLevel,
                                            String className,
@@ -22,7 +24,10 @@ public class LogEntryServiceImpl extends ServiceImpl<LogEntryMapper, LogEntry> i
                                            String threadName,
                                            LocalDateTime startTime,
                                            LocalDateTime endTime,
-                                           String keyword) {
+                                           String keyword,
+                                           String traceId,
+                                           String serviceName,
+                                           String logSource) {
         LambdaQueryWrapper<LogEntry> wrapper = new LambdaQueryWrapper<>();
 
         if (StringUtils.hasText(logLevel)) {
@@ -51,8 +56,25 @@ public class LogEntryServiceImpl extends ServiceImpl<LogEntryMapper, LogEntry> i
                     .or()
                     .like(LogEntry::getFileName, keyword));
         }
+        if (StringUtils.hasText(traceId)) {
+            wrapper.eq(LogEntry::getTraceId, traceId);
+        }
+        if (StringUtils.hasText(serviceName)) {
+            wrapper.eq(LogEntry::getServiceName, serviceName);
+        }
+        if (StringUtils.hasText(logSource)) {
+            wrapper.eq(LogEntry::getLogSource, logSource);
+        }
 
         wrapper.orderByDesc(LogEntry::getId);
         return baseMapper.selectPage(page, wrapper);
+    }
+
+    @Override
+    public List<LogEntry> getLogsByTraceId(String traceId) {
+        LambdaQueryWrapper<LogEntry> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(LogEntry::getTraceId, traceId)
+               .orderByAsc(LogEntry::getLogTime);
+        return list(wrapper);
     }
 }
