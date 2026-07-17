@@ -11,8 +11,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 /**
  * 异步处理线程池配置
  * <p>
- * 为日志批处理的WebSocket广播和RabbitMQ发送提供独立线程池，
- * 避免这些IO操作阻塞主轮询线程的文件读取和数据库批量写入。
+ * 为日志批处理的异步任务提供独立线程池，
+ * 避免异步逻辑阻塞主轮询线程的文件读取和数据库批量写入。
  */
 @Configuration
 @EnableAsync

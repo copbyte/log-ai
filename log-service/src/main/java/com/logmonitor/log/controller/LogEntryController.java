@@ -4,19 +4,20 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.logmonitor.common.entity.LogEntry;
 import com.logmonitor.common.result.Result;
-import com.logmonitor.log.service.impl.LogEntryServiceImpl;
+import com.logmonitor.log.service.LogEntryService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/log")
 public class LogEntryController {
 
-    private final LogEntryServiceImpl logEntryService;
+    private final LogEntryService logEntryService;
 
-    public LogEntryController(LogEntryServiceImpl logEntryService) {
+    public LogEntryController(LogEntryService logEntryService) {
         this.logEntryService = logEntryService;
     }
 
@@ -30,13 +31,23 @@ public class LogEntryController {
             @RequestParam(name = "threadName", required = false) String threadName,
             @RequestParam(name = "startTime", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
             @RequestParam(name = "endTime", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
-            @RequestParam(name = "keyword", required = false) String keyword) {
+            @RequestParam(name = "keyword", required = false) String keyword,
+            @RequestParam(name = "traceId", required = false) String traceId,
+            @RequestParam(name = "serviceName", required = false) String serviceName,
+            @RequestParam(name = "logSource", required = false) String logSource) {
         return Result.success(logEntryService.pageWithFilters(
-                new Page<>(page, size), logLevel, className, fileName, threadName, startTime, endTime, keyword));
+                new Page<>(page, size), logLevel, className, fileName, threadName,
+                startTime, endTime, keyword, traceId, serviceName, logSource));
     }
 
     @GetMapping("/entries/{id}")
     public Result<LogEntry> getById(@PathVariable("id") Long id) {
         return Result.success(logEntryService.getById(id));
+    }
+
+    /** 按 TraceID 查询关联日志（链路日志聚合） */
+    @GetMapping("/trace/{traceId}")
+    public Result<List<LogEntry>> getByTraceId(@PathVariable("traceId") String traceId) {
+        return Result.success(logEntryService.getLogsByTraceId(traceId));
     }
 }

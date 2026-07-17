@@ -1,42 +1,41 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
-import AppLayout from './components/Layout'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Logs from './pages/Logs'
-import AIAnalysis from './pages/AIAnalysis'
-import AlertRules from './pages/AlertRules'
-import AlertRecords from './pages/AlertRecords'
+import { Layout, Typography } from 'antd'
+import { RobotOutlined } from '@ant-design/icons'
+import ChatWindow from '@/components/ChatWindow'
+import ThemeToggle from '@/components/ThemeToggle'
+import type { ThemeMode } from '@/hooks/useTheme'
 
-function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const token = localStorage.getItem('token')
-  if (!token) {
-    return <Navigate to="/login" replace />
-  }
-  return <>{children}</>
+const { Header, Content } = Layout
+const { Title } = Typography
+
+interface Props {
+  mode: ThemeMode
+  onToggleTheme: () => void
 }
 
-function App() {
+/** 应用主体：顶部标题栏 + 对话主区 */
+export default function App({ mode, onToggleTheme }: Props) {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route
-        path="/"
-        element={
-          <PrivateRoute>
-            <AppLayout />
-          </PrivateRoute>
-        }
+    <Layout style={{ height: '100vh' }}>
+      <Header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 20px',
+          background: 'var(--header-bg, #001529)',
+        }}
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard />} />
-        <Route path="logs" element={<Logs />} />
-        <Route path="ai-analysis" element={<AIAnalysis />} />
-        <Route path="alert-rules" element={<AlertRules />} />
-        <Route path="alert-records" element={<AlertRecords />} />
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <RobotOutlined style={{ fontSize: 22, color: '#1677ff' }} />
+          <Title level={4} style={{ color: 'var(--header-fg, #fff)', margin: 0 }}>
+            Log Monitor AI
+          </Title>
+        </div>
+        <ThemeToggle mode={mode} onToggle={onToggleTheme} />
+      </Header>
+      <Content style={{ background: 'var(--content-bg, #f5f5f5)' }}>
+        <ChatWindow />
+      </Content>
+    </Layout>
   )
 }
-
-export default App
