@@ -1,6 +1,25 @@
 # 项目排除路径
-/ai-service/target/
-/alert-service/target/
-/common/target/
-/gateway/target/
-/log-service/target/
+*/target/
+/target/
+
+# IDE
+/.idea/
+*.iml
+*.iws
+*.ipr
+/.vscode/
+/.claude
+
+# 日志文件
+/logs/
+*.log
+
+# 前端
+/log-ai-frontend/node_modules/
+/log-ai-frontend/dist/
+/log-ai-frontend/.vite/
+*.tsbuildinfo
+
+# 操作系统
+.DS_Store
+Thumbs.db

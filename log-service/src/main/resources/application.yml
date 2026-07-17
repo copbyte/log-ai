@@ -5,38 +5,37 @@ spring:
   application:
     name: log-service
   datasource:
-    url: jdbc:h2:mem:log_monitor;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
-    listener:
-      simple:
-        acknowledge-mode: manual
+    url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: "123456"
+#  h2:
+#    console:
+#      enabled: true
+#      path: /h2-console
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.logmonitor.common.entity
   global-config:
     db-config:
       id-type: auto
       table-underline: true
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+#    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
 
 logging:
   level:
     com.logmonitor: debug
+    com.baomidou.mybatisplus: debug
 
 log:
   watch:
-    directory: ./logs
+    directory: D:/zyjk/log-ai/logs
     poll-interval-ms: 500
+    # 单部署建议开启：过滤监控平台自身组件日志，防止反馈循环
+    # 多部署（监控与被监控分离）可关闭，完整采集自身日志
+    filter-self-logs: true
+    self-log-classes: com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService
