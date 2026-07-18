@@ -17,14 +17,13 @@
     <!-- 文件输出（自动创建） -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_FILE}</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <!-- 每天生成一个日志文件 -->
+        <!-- logback 1.5+ 废弃 SizeAndTimeBasedFNATP，改用 SizeAndTimeBasedRollingPolicy 统一管理时间+大小切分 -->
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- 每天一个日志文件，超过 10MB 按序号切分 -->
             <fileNamePattern>${LOG_PATH}/log-service.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
             <!-- 保留30天日志 -->
             <maxHistory>30</maxHistory>
-            <timeBasedFileNamingAndTriggeringPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
-                <maxFileSize>10MB</maxFileSize>
-            </timeBasedFileNamingAndTriggeringPolicy>
+            <maxFileSize>10MB</maxFileSize>
         </rollingPolicy>
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %p [%t] %c{1} - %m%n</pattern>

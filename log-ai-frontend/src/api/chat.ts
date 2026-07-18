@@ -3,16 +3,30 @@ import type { Message, Role } from '@/types'
 const CHAT_URL = '/api/chat'
 
 /**
- * 发送对话消息（同步模式）
- * 后端：mcp-server ChatController POST /api/chat
- * 请求体：{ message: string }
- * 响应体：{ response: string }
+ * 历史消息条目（与后端 ChatController.ChatMessage 对应）
  */
-export async function sendMessage(message: string): Promise<string> {
+export interface ChatHistoryItem {
+  role: Role
+  content: string
+}
+
+/**
+ * 发送对话消息（同步模式，支持多轮上下文）
+ * 后端：mcp-server ChatController POST /api/chat
+ * 请求体：{ message: string, history: ChatHistoryItem[] }
+ * 响应体：{ response: string }
+ *
+ * @param message 当前用户输入
+ * @param history 历史对话消息（按时间升序，不包含当前 message），后端会拼接为上下文
+ */
+export async function sendMessage(
+  message: string,
+  history: ChatHistoryItem[] = [],
+): Promise<string> {
   const resp = await fetch(CHAT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, history }),
   })
   if (!resp.ok) {
     throw new Error(`对话请求失败: ${resp.status} ${resp.statusText}`)
@@ -30,9 +44,10 @@ export async function streamMessage(
   message: string,
   onChunk: (delta: string) => void,
   signal?: AbortSignal,
+  history: ChatHistoryItem[] = [],
 ): Promise<void> {
   // 当前未启用，直接走同步
-  const text = await sendMessage(message)
+  const text = await sendMessage(message, history)
   onChunk(text)
 }
 
