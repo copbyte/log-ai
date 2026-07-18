@@ -28,7 +28,7 @@ public class ChatClientConfig {
                 .defaultSystem("你是一个专业的日志分析助手，可以帮助用户检索日志、分析异常、定位根因。"
                         + "当用户询问日志相关问题时，请调用相应的工具获取数据，然后给出分析结论。"
                         + "回答使用中文，结构清晰。")
-                .defaultTools(toolProvider)
+                .defaultToolCallbacks(toolProvider)
                 .build();
     }
 }
