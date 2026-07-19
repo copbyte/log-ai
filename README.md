@@ -30,12 +30,13 @@ flowchart TB
 
     subgraph LOG[日志层]
         LS[log-service<br/>Spring Boot 3.3.6<br/>:8081]
-        FW[FileWatchService<br/>文件监控 + TraceID 解析]
+        FW[FileWatchService<br/>多目录 + 多格式 + H2 偏移量]
         LS --- FW
     end
 
     subgraph STORE[存储层]
         DB[(MySQL 8<br/>log_entry 表)]
+        H2[(H2 嵌入式<br/>file_offset 表)]
     end
 
     subgraph EXT[外部 AI Client]
@@ -46,6 +47,7 @@ flowchart TB
     MCP -->|REST /api/log/**| LS
     LS -->|MyBatis-Plus| DB
     FW -->|批量写入| DB
+    FW -.->|偏移量 flush| H2
     C1 -.->|MCP SSE 协议| MCP
 ```
 
@@ -94,12 +96,25 @@ flowchart TB
 日志采集与查询服务。
 
 **核心功能：**
-- `FileWatchService` 监控目录，增量读取日志文件（WatchService + RandomAccessFile）
-- 标准格式解析（时间 + 级别 + 线程 + 类名 + 内容），非标准格式自动降级解析
+- `FileWatchService` 多目录监听，增量读取日志文件（WatchService + RandomAccessFile）
+- 多格式自动适配（5 个 Parser + 兜底）：logback 自定义/默认、log4j2 默认、JSON、纯文本
+- 文件首次读取时取前 10 行做格式探测，绑定命中率最高的 Parser
 - TraceID 正则提取（兼容 SkyWalking TID、通用 `traceId`、`tid` 格式）
 - 服务名推断（文件名去 `.log` 后缀）
 - `LogBatchProcessor` 异步批处理，MyBatis-Plus `saveBatch` 批量入库
 - 自身日志过滤（防止单部署反馈循环）
+- **偏移量持久化**：内存缓存 + H2 嵌入式数据库，每 10 秒 flush，重启不重复采集
+- **OOM 防护**：单次 batch 上限 1000 条，单次读取上限 5000 行
+
+**日志格式适配器（parser 包）：**
+
+| Parser | 适配格式 | 示例 |
+|---|---|---|
+| `JsonLogParser` | logstash-encoder JSON 输出 | `{"@timestamp":"...","level":"INFO","message":"..."}` |
+| `LogbackCustomParser` | logback 自定义格式（`-` 分隔） | `2026-07-19 21:33:35.138 INFO [main] c.l.l.App - Starting...` |
+| `LogbackDefaultParser` | Spring Boot 默认控制台格式（`:` 分隔） | `2026-07-19 21:33:35.138  INFO [main] c.l.l.App : Starting...` |
+| `Log4j2DefaultParser` | log4j2 默认格式（时分秒，无日期） | `21:33:35.138 INFO [main] c.l.l.App - Starting...` |
+| `PlainLogParser` | 兜底，所有格式不匹配时使用 | 只提取日志级别，其他字段丢失 |
 
 **REST API：**
 
@@ -125,10 +140,14 @@ flowchart TB
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `log.watch.directory` | — | 日志监控目录 |
+| `log.watch.directories` | — | 日志监控目录（逗号分隔，支持多目录） |
 | `log.watch.poll-interval-ms` | 500 | 轮询间隔（ms） |
 | `log.watch.filter-self-logs` | true | 过滤自身组件日志 |
 | `log.watch.self-log-classes` | LogBatchProcessor,FileWatchService | 自身组件类名（逗号分隔） |
+
+**偏移量持久化（H2 嵌入式）：**
+
+启动后自动在项目根目录创建 `data/log-offset.*` 文件（H2 数据库），存储 `file_offset(file_path PK, offset, updated_at)` 表。进程重启时从 H2 恢复偏移量，避免重复采集。H2 DataSource 独立于主 MySQL DataSource，配置在 `OffsetDataSourceConfig` 中。
 
 ### 3.3 mcp-server — 端口 8082
 
@@ -181,7 +200,7 @@ spring:
         annotation-scanner:
           enabled: true
     openai:
-      api-key: ${DEEPSEEK_API_KEY:sk-placeholder}
+      api-key: ${DEEPSEEK_API_KEY:sk-placeholder}    # 通过环境变量注入
       base-url: https://api.deepseek.com
       chat:
         options:
@@ -190,6 +209,10 @@ spring:
 log-service:
   url: http://localhost:8081
 ```
+
+> **API Key 注入**：通过环境变量 `DEEPSEEK_API_KEY` 注入，配置文件中仅为占位符。本地运行时可在 IDEA 启动配置或 shell 中设置：
+> - PowerShell：`$env:DEEPSEEK_API_KEY="sk-your-real-key"`
+> - Linux/Mac：`export DEEPSEEK_API_KEY=sk-your-real-key`
 
 ### 3.4 log-ai-frontend — 端口 3000
 
@@ -243,7 +266,9 @@ log-ai-frontend/src/
 | `log_source` | VARCHAR | 日志来源类型（FILE/HTTP/ELK/LOKI/MOCK） |
 | `create_time` / `update_time` | DATETIME | 审计字段 |
 
-**索引：** `idx_log_time`、`idx_log_level`、`idx_trace_id`、`idx_service_name`、`idx_log_source`
+**索引：** `idx_log_time`、`idx_log_level`、`idx_trace_id`、`idx_service_name`、`idx_log_source`、`idx_service_level_time`（复合）、`idx_level_time`（复合）
+
+> 复合索引脚本：[.docs/log_entry_indexes.sql](file:///d:/zyjk/log-ai/.docs/log_entry_indexes.sql)，需在 MySQL 中手动执行
 
 ### 4.2 初始化
 
@@ -275,7 +300,8 @@ mysql -u root -p log_monitor < .docs/logs.sql
 **2. 启动 log-service（:8081）**
 
 ```bash
-# 修改 log-service/src/main/resources/application.yml 中的数据源 + log.watch.directory
+# 修改 log-service/src/main/resources/application.yml 中的数据源 + log.watch.directories
+# directories 支持逗号分隔多目录，如：D:/zyjk/testlog,D:/my-project/logs
 mvn spring-boot:run -pl log-service
 ```
 
@@ -378,9 +404,11 @@ log-ai/
 ├── common/                              # 公共模块（Entity/Enum/Result/Exception）
 ├── log-service/                         # 日志采集服务（文件监控 + REST API）
 │   └── src/main/java/com/logmonitor/log/
-│       ├── config/                      # AsyncConfig、FileWatchConfig、MybatisPlusConfig
+│       ├── config/                      # AsyncConfig、FileWatchConfig、MybatisPlusConfig、OffsetDataSourceConfig
 │       ├── controller/                  # LogCollectController、LogEntryController
+│       ├── parser/                      # LogParser 接口 + 5 个适配器 + LogParserRegistry
 │       ├── service/impl/                # FileWatchService、LogBatchProcessor、LogEntryServiceImpl
+│       ├── store/                       # FileOffsetStore 接口 + H2FileOffsetStore 实现
 │       └── mapper/                      # LogEntryMapper
 ├── mcp-server/                          # MCP Server + ChatClient
 │   └── src/main/java/com/logmonitor/mcp/
@@ -415,4 +443,4 @@ log-ai/
 | `v1.0.0` | v1.0 基线 tag，标记在 log-ai-1.0.1 末尾 |
 
 ---
-*文档更新：2026-07-17 · v2.0 · MCP + Spring AI 架构*
+*文档更新：2026-07-19 · v2.1 · 多目录监听 + 多格式适配 + H2 偏移量持久化*
