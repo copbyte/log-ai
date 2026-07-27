@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Typography } from 'antd'
 import type { Message } from '@/types'
-import { sendMessage, emptyMessage } from '@/api/chat'
+import { streamMessage, emptyMessage } from '@/api/chat'
 import MessageItem from './MessageItem'
 import InputBox from './InputBox'
 import QuickActions from './QuickActions'
@@ -57,10 +57,32 @@ export default function ChatWindow() {
     setLoading(true)
 
     try {
-      const resp = await sendMessage(text, history)
+      // 流式：每收到一个文本片段就追加到 aiMsg.content，并取消 pending 状态
+      // —— 原同步实现（已注释保留）——
+      // const resp = await sendMessage(text, history)
+      // setMessages((prev) =>
+      //   prev.map((m) =>
+      //     m.id === aiMsg.id ? { ...m, content: resp, pending: false } : m,
+      //   ),
+      // )
+      await streamMessage(
+        text,
+        (delta) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === aiMsg.id
+                ? { ...m, content: m.content + delta, pending: false }
+                : m,
+            ),
+          )
+        },
+        undefined,
+        history,
+      )
+      // 流结束兜底：确保 pending 为 false（极端情况未收到任何 chunk）
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === aiMsg.id ? { ...m, content: resp, pending: false } : m,
+          m.id === aiMsg.id ? { ...m, pending: false } : m,
         ),
       )
     } catch (e) {

@@ -4,7 +4,10 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +51,58 @@ public class ChatController {
      */
     @PostMapping
     public Map<String, String> chat(@RequestBody ChatRequest request) {
+        List<Message> messages = buildMessages(request);
+        // defaultSystem + defaultToolCallbacks 由 ChatClient 自动注入
+        String response = chatClient.prompt()
+                .messages(messages)
+                .call()
+                .content();
+        return Map.of("response", response);
+    }
+
+    /**
+     * 流式对话接口（SSE，支持多轮上下文）
+     * <p>
+     * 响应 Content-Type: text/event-stream
+     * 每个事件格式：
+     *   event: delta\n
+     *   data: 文本片段\n\n
+     * 流结束发送一个：
+     *   event: done\n
+     *   data: [DONE]\n\n
+     * <p>
+     * Spring MVC 容器也支持返回 Flux&lt;ServerSentEvent&gt;，
+     * 会通过 ResponseBodyEmitter 适配为 Servlet 异步流式响应。
+     */
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> stream(@RequestBody ChatRequest request) {
+        List<Message> messages = buildMessages(request);
+
+        // chatClient.stream() 返回 Flux<ChatResponse>，.content() 提取为 Flux<String>
+        return chatClient.prompt()
+                .messages(messages)
+                .stream()
+                .content()
+                .map(chunk -> ServerSentEvent.<String>builder()
+                        .event("delta")
+                        .data(chunk)
+                        .build())
+                // 流末尾追加 [DONE] 哨兵事件，便于前端判断结束
+                .concatWith(Flux.just(ServerSentEvent.<String>builder()
+                        .event("done")
+                        .data("[DONE]")
+                        .build()))
+                .onErrorResume(e -> Flux.just(ServerSentEvent.<String>builder()
+                        .event("error")
+                        .data(e.getMessage() != null ? e.getMessage() : "stream error")
+                        .build()));
+    }
+
+    /**
+     * 从 ChatRequest 构造 Spring AI Message 列表（历史截断 + 当前用户输入）
+     * 同步 / 流式接口共用
+     */
+    private List<Message> buildMessages(ChatRequest request) {
         String currentMessage = request.message();
         List<ChatMessage> history = request.history() != null ? request.history() : List.of();
 
@@ -70,12 +125,6 @@ public class ChatController {
             }
         }
         messages.add(new UserMessage(currentMessage));
-
-        // defaultSystem + defaultToolCallbacks 由 ChatClient 自动注入
-        String response = chatClient.prompt()
-                .messages(messages)
-                .call()
-                .content();
-        return Map.of("response", response);
+        return messages;
     }
 }

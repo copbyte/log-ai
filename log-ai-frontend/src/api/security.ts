@@ -96,9 +96,55 @@ export async function fetchAlerts(
 /**
  * 查询告警统计（含总数、各状态数、各严重级别数、近24小时趋势）
  * 后端 GET /api/alert/stats
+ *
+ * 后端原始返回结构：
+ *   { total, statusCount: {OPEN, ACK, RESOLVED},
+ *     severityCount: { "7": 160, "8": 433, ... },
+ *     hourlyTrend: { "2026-07-27 16:00": 479, ... },
+ *     recent24hCount }
+ * 前端 AlertStats 期望扁平字段 + trend 数组，这里做一次映射。
  */
 export async function fetchAlertStats(): Promise<AlertStats> {
-  return request<AlertStats>(`${BASE_URL}/api/alert/stats`)
+  const raw = await request<{
+    total?: number
+    statusCount?: Record<string, number>
+    severityCount?: Record<string, number>
+    hourlyTrend?: Record<string, number>
+    recent24hCount?: number
+  }>(`${BASE_URL}/api/alert/stats`)
+
+  const sc = raw.statusCount ?? {}
+  const sev = raw.severityCount ?? {}
+  // 严重级别分桶：>=8 严重，5-7 高危，3-4 中危，1-2 低危
+  let criticalCount = 0
+  let highCount = 0
+  let mediumCount = 0
+  let lowCount = 0
+  for (const [k, v] of Object.entries(sev)) {
+    const level = Number(k)
+    const count = Number(v) || 0
+    if (level >= 8) criticalCount += count
+    else if (level >= 5) highCount += count
+    else if (level >= 3) mediumCount += count
+    else lowCount += count
+  }
+
+  // hourlyTrend Map -> trend 数组（按时间升序，便于折线图渲染）
+  const trend = Object.entries(raw.hourlyTrend ?? {})
+    .map(([hour, count]) => ({ hour, count: Number(count) || 0 }))
+    .sort((a, b) => a.hour.localeCompare(b.hour))
+
+  return {
+    total: Number(raw.total) || 0,
+    openCount: Number(sc.OPEN) || 0,
+    ackCount: Number(sc.ACK) || 0,
+    resolvedCount: Number(sc.RESOLVED) || 0,
+    criticalCount,
+    highCount,
+    mediumCount,
+    lowCount,
+    trend,
+  }
 }
 
 /**
