@@ -1,5 +1,7 @@
 # Log Monitor AI Platform
 
+> **当前分支：log-ai-SA（态势感知增强版）** - 基于 AI 日志分析平台扩展安全态势感知能力
+
 基于 MCP 协议的日志分析 Agent 平台。将日志检索、链路追踪、异常聚类、根因定位封装为 AI 可调用的工具，支持自然语言对话式日志分析。
 
 ## 1. 核心能力
@@ -11,6 +13,24 @@
 - **MCP 协议**：日志分析能力通过 MCP Server 暴露，其他 AI 应用可作为 MCP Client 接入
 - **多源日志**：支持 FILE（文件监控）/ HTTP（接口上报）/ ELK / LOKI / MOCK 多种来源
 - **可视化展示**：TraceID 链路时间线、异常聚类柱状图、Markdown 渲染
+
+### 1.1 态势感知增强版说明
+
+log-ai-SA 分支在原 AI 日志分析平台基础上扩展了安全能力，使平台从单纯的日志分析工具升级为面向安全运营的态势感知系统。
+
+**新增能力：**
+
+- **Syslog 采集**：基于 UDP 5140 端口实时接收 Syslog / CEF 格式安全日志
+- **规则引擎**：定时（每分钟）扫描日志，按规则匹配触发告警
+- **告警管理**：告警 CRUD、状态流转、统计聚合
+- **安全异常检测**：AI 安全分析 Tool，识别异常 IP、攻击行为、异常流量
+- **态势大屏**：前端"安全态势"tab 可视化大屏，展示告警趋势、威胁分布
+
+**适用场景：**
+
+- 安全运营中心（SOC）
+- 网络监控与威胁检测
+- 安全事件响应与分析
 
 ## 2. 架构
 
@@ -69,6 +89,24 @@ flowchart TB
 | 图表库 | recharts | 2.13 |
 | Markdown | react-markdown + remark-gfm | 9 + 4 |
 | 前端构建 | Vite | 6.0 |
+
+### 2.3 SA 架构扩展
+
+log-ai-SA 分支在原架构基础上扩展了以下组件：
+
+```mermaid
+flowchart TB
+    subgraph SA[态势感知扩展]
+        SYS[Syslog 采集器<br/>UDP 5140]
+        SIM[模拟日志生成器<br/>面试演示]
+        RE[规则引擎<br/>定时匹配]
+        ALERT[告警管理<br/>CRUD + 统计]
+    end
+    SYS --> DB
+    SIM --> DB
+    DB --> RE --> ALERT
+    ALERT --> UI2[安全态势大屏]
+```
 
 ## 3. 模块说明
 
@@ -247,6 +285,19 @@ log-ai-frontend/src/
 └── index.css                # CSS 变量（浅色/暗色双主题）
 ```
 
+### 3.5 态势感知扩展模块
+
+log-ai-SA 分支新增的安全相关组件：
+
+| 组件 | 所在模块 | 说明 |
+|---|---|---|
+| `SyslogParser` / `CEFParser` | log-service parser 包 | 安全日志格式解析（标准 Syslog 与 CEF） |
+| `SyslogServerService` | log-service | UDP Syslog 采集器，监听 5140 端口 |
+| `RuleEngineService` | log-service | 规则引擎，每分钟定时扫描日志匹配规则 |
+| `RuleService` / `AlertService` | log-service | 规则与告警管理（CRUD + 统计） |
+| `SecurityLogSimulator` | log-service | 模拟安全日志生成器（面试演示用） |
+| `detectAnomalies` / `correlateEvents` | mcp-server tool | AI 安全分析 Tool，异常检测与事件关联 |
+
 ## 4. 数据库
 
 ### 4.1 log_entry 表
@@ -277,6 +328,48 @@ mysql -u root -p < .docs/logs.sql
 ```
 
 `.docs/logs.sql` 内置 5 个场景的 Mock 测试数据（trace-001/002/003 链路，含 NPE、超时、OOM、DB 连接失败异常），可直接体验对话分析。
+
+### 4.3 SA 扩展表
+
+log-ai-SA 分支在原 `log_entry` 表基础上扩展了安全字段，并新增 `rule`、`alert` 两张表。
+
+**log_entry 新增安全字段：**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `src_ip` | VARCHAR | 源 IP |
+| `dst_ip` | VARCHAR | 目标 IP |
+| `src_port` | INT | 源端口 |
+| `dst_port` | INT | 目标端口 |
+| `protocol` | VARCHAR | 协议（TCP / UDP / ICMP / HTTP 等） |
+| `action` | VARCHAR | 动作（ALLOW / DENY / REJECT 等） |
+| `severity` | VARCHAR | 威胁等级（INFO / WARN / CRITICAL 等） |
+
+**rule 表（规则定义）：**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | BIGINT PK | 主键 |
+| `name` | VARCHAR | 规则名称 |
+| `description` | VARCHAR | 规则描述 |
+| `pattern` | TEXT | 匹配表达式（关键字 / 正则） |
+| `severity` | VARCHAR | 命中后告警等级 |
+| `enabled` | TINYINT | 是否启用（0 / 1） |
+| `create_time` / `update_time` | DATETIME | 审计字段 |
+
+**alert 表（告警记录）：**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | BIGINT PK | 主键 |
+| `rule_id` | BIGINT | 关联规则 ID |
+| `log_entry_id` | BIGINT | 命中的日志 ID |
+| `content` | TEXT | 告警内容 |
+| `severity` | VARCHAR | 告警等级 |
+| `status` | VARCHAR | 告警状态（PENDING / RESOLVED / IGNORED） |
+| `create_time` / `update_time` | DATETIME | 审计字段 |
+
+> 建表脚本：[.docs/sa_schema.sql](file:///d:/zyjk/log-ai/.docs/sa_schema.sql)，需在 MySQL 中手动执行
 
 ## 5. 部署
 
@@ -359,6 +452,45 @@ mcp-server 同时作为独立 MCP Server 暴露给其他 AI 应用使用。在 M
 ```
 
 接入后，AI 应用可通过自然语言调用 4 个日志分析工具。
+
+### 5.5 SA 模式启动
+
+log-ai-SA 分支在原有启动流程基础上，增加以下步骤启用态势感知能力：
+
+**1. 执行 SA 扩展脚本**
+
+```bash
+mysql -u root -p log_monitor < .docs/sa_schema.sql
+```
+
+脚本会扩展 `log_entry` 表（新增安全字段）并创建 `rule`、`alert` 两张表。
+
+**2. 开启 Syslog 采集（可选）**
+
+在 `log-service/src/main/resources/application.yml` 中：
+
+```yaml
+log:
+  syslog:
+    enabled: true        # 开启 UDP 5140 Syslog 采集
+```
+
+**3. 开启模拟数据（演示用，可选）**
+
+```yaml
+log:
+  simulator:
+    enabled: true        # 启动后自动生成模拟安全日志
+```
+
+> 面试 / 演示场景建议开启 `simulator.enabled`，可快速产生模拟攻击日志用于规则匹配与告警展示。
+
+**4. 启动后访问**
+
+- 前端"安全态势"tab 查看态势大屏
+- 在 AI 对话中触发安全分析 Tool：
+  - "检测最近异常" — 调用 `detectAnomalies` 工具
+  - "分析攻击源 IP" — 调用 `correlateEvents` 工具
 
 ## 6. 使用示例
 
@@ -443,4 +575,4 @@ log-ai/
 | `v1.0.0` | v1.0 基线 tag，标记在 log-ai-1.0.1 末尾 |
 
 ---
-*文档更新：2026-07-19 · v2.1 · 多目录监听 + 多格式适配 + H2 偏移量持久化*
+*文档更新：2026-07-19 · v3.0 SA · 态势感知增强版*

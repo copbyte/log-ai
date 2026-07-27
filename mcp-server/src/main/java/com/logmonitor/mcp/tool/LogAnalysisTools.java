@@ -90,6 +90,321 @@ public class LogAnalysisTools {
         return formatRootCauseAnalysis(traceId, logs);
     }
 
+    /**
+     * 安全异常检测：识别高频访问IP、端口扫描、SQL注入、XSS、暴力破解等
+     */
+    @Tool(description = "安全异常检测。基于统计方法分析最近的日志，识别异常行为：高频访问IP、异常端口扫描、SQL注入特征、XSS攻击特征、暴力破解等。返回检测到的异常事件列表及风险级别。")
+    public String detectAnomalies(
+            @ToolParam(description = "检测时间范围（分钟），默认60", required = false) Integer timeRangeMinutes) {
+
+        int minutes = timeRangeMinutes != null ? timeRangeMinutes : 60;
+
+        log.info("Tool detectAnomalies: timeRangeMinutes={}", minutes);
+
+        // 查询 ERROR / WARN 级别日志
+        Map<String, Object> errorResult = logServiceClient.searchLogs("ERROR", null, null, null, 1, 100);
+        Map<String, Object> warnResult = logServiceClient.searchLogs("WARN", null, null, null, 1, 100);
+
+        // 查询告警统计和最近告警
+        Map<String, Object> alertStats = logServiceClient.getAlertStats();
+        Map<String, Object> alerts = logServiceClient.getAlerts(null, null, 1, 50);
+
+        // 汇总日志
+        List<Map<String, Object>> allLogs = new ArrayList<>();
+        allLogs.addAll(extractRecords(errorResult));
+        allLogs.addAll(extractRecords(warnResult));
+
+        List<Map<String, Object>> anomalies = new ArrayList<>();
+
+        // 1. 高频源 IP 检测
+        Map<String, Integer> ipCount = new HashMap<>();
+        for (Map<String, Object> logEntry : allLogs) {
+            String ip = logEntry.get("srcIp") != null ? String.valueOf(logEntry.get("srcIp")) : null;
+            if (ip != null && !ip.isEmpty() && !"null".equals(ip)) {
+                ipCount.merge(ip, 1, Integer::sum);
+            }
+        }
+        for (Map.Entry<String, Integer> entry : ipCount.entrySet()) {
+            if (entry.getValue() >= 5) {
+                Map<String, Object> anomaly = new HashMap<>();
+                anomaly.put("type", "高频访问IP");
+                anomaly.put("srcIp", entry.getKey());
+                anomaly.put("count", entry.getValue());
+                anomaly.put("riskLevel", entry.getValue() >= 20 ? "高" : (entry.getValue() >= 10 ? "中" : "低"));
+                anomaly.put("description", "IP " + entry.getKey() + " 在最近 " + minutes + " 分钟内产生 " + entry.getValue() + " 条异常日志");
+                anomalies.add(anomaly);
+            }
+        }
+
+        // 2. 攻击特征检测（SQL注入 / XSS）
+        String[] sqlInjectionPatterns = {"union select", "or 1=1", "' or '", "/*", "*/", "xp_", "exec "};
+        String[] xssPatterns = {"<script", "javascript:", "onerror=", "onload=", "<img src"};
+        for (Map<String, Object> logEntry : allLogs) {
+            String content = logEntry.get("content") != null ? String.valueOf(logEntry.get("content")) : "";
+            String lowerContent = content.toLowerCase();
+            String ip = logEntry.get("srcIp") != null ? String.valueOf(logEntry.get("srcIp")) : null;
+
+            for (String pattern : sqlInjectionPatterns) {
+                if (lowerContent.contains(pattern)) {
+                    Map<String, Object> anomaly = new HashMap<>();
+                    anomaly.put("type", "SQL注入特征");
+                    anomaly.put("srcIp", ip);
+                    anomaly.put("pattern", pattern);
+                    anomaly.put("content", content);
+                    anomaly.put("riskLevel", "高");
+                    anomaly.put("logTime", logEntry.get("logTime"));
+                    anomaly.put("description", "检测到 SQL 注入特征: " + pattern);
+                    anomalies.add(anomaly);
+                    break;
+                }
+            }
+            for (String pattern : xssPatterns) {
+                if (lowerContent.contains(pattern)) {
+                    Map<String, Object> anomaly = new HashMap<>();
+                    anomaly.put("type", "XSS攻击特征");
+                    anomaly.put("srcIp", ip);
+                    anomaly.put("pattern", pattern);
+                    anomaly.put("content", content);
+                    anomaly.put("riskLevel", "高");
+                    anomaly.put("logTime", logEntry.get("logTime"));
+                    anomaly.put("description", "检测到 XSS 攻击特征: " + pattern);
+                    anomalies.add(anomaly);
+                    break;
+                }
+            }
+        }
+
+        // 3. deny/blocked 动作检测（暴力破解迹象）
+        Map<String, Integer> denyCount = new HashMap<>();
+        for (Map<String, Object> logEntry : allLogs) {
+            String action = logEntry.get("action") != null ? String.valueOf(logEntry.get("action")) : null;
+            if ("deny".equalsIgnoreCase(action) || "blocked".equalsIgnoreCase(action)) {
+                String ip = logEntry.get("srcIp") != null ? String.valueOf(logEntry.get("srcIp")) : null;
+                if (ip != null && !"null".equals(ip)) {
+                    denyCount.merge(ip, 1, Integer::sum);
+                }
+            }
+        }
+        for (Map.Entry<String, Integer> entry : denyCount.entrySet()) {
+            if (entry.getValue() >= 3) {
+                Map<String, Object> anomaly = new HashMap<>();
+                anomaly.put("type", "暴力破解");
+                anomaly.put("srcIp", entry.getKey());
+                anomaly.put("count", entry.getValue());
+                anomaly.put("riskLevel", entry.getValue() >= 10 ? "高" : "中");
+                anomaly.put("description", "IP " + entry.getKey() + " 触发 " + entry.getValue() + " 次 deny/blocked 动作，疑似暴力破解");
+                anomalies.add(anomaly);
+            }
+        }
+
+        // 按风险级别排序（高 > 中 > 低）
+        Map<String, Integer> riskOrder = new HashMap<>();
+        riskOrder.put("高", 0);
+        riskOrder.put("中", 1);
+        riskOrder.put("低", 2);
+        anomalies.sort((a, b) -> riskOrder.getOrDefault(String.valueOf(a.get("riskLevel")), 3)
+                - riskOrder.getOrDefault(String.valueOf(b.get("riskLevel")), 3));
+
+        // 构造人类可读文本
+        StringBuilder sb = new StringBuilder();
+        sb.append("安全异常检测报告（最近 ").append(minutes).append(" 分钟）\n\n");
+        sb.append("分析日志总数: ").append(allLogs.size()).append("\n");
+        sb.append("检测到异常事件: ").append(anomalies.size()).append(" 个\n\n");
+
+        if (anomalies.isEmpty()) {
+            sb.append("未检测到明显异常行为\n");
+        } else {
+            sb.append("=== 异常事件列表 ===\n");
+            for (int i = 0; i < anomalies.size(); i++) {
+                Map<String, Object> a = anomalies.get(i);
+                sb.append(i + 1).append(". [").append(a.get("riskLevel")).append("风险] ")
+                  .append(a.get("type")).append(" - ").append(a.get("description")).append("\n");
+                if (a.get("srcIp") != null) {
+                    sb.append("   源IP: ").append(a.get("srcIp")).append("\n");
+                }
+                if (a.get("logTime") != null) {
+                    sb.append("   时间: ").append(a.get("logTime")).append("\n");
+                }
+                sb.append("\n");
+            }
+        }
+
+        // 追加 anomaly 结构化块：前端渲染异常事件列表
+        Map<String, Object> toolData = new HashMap<>();
+        toolData.put("timeRangeMinutes", minutes);
+        toolData.put("totalLogs", allLogs.size());
+        toolData.put("anomalyCount", anomalies.size());
+        toolData.put("anomalies", anomalies);
+        toolData.put("alertStats", alertStats != null ? alertStats.get("data") : null);
+        toolData.put("recentAlerts", alerts != null ? alerts.get("data") : null);
+        return appendToolBlock(sb.toString(), "anomaly", toolData);
+    }
+
+    /**
+     * 安全事件关联分析：按源IP或时间窗口关联多条日志，还原攻击链路
+     */
+    @Tool(description = "安全事件关联分析。按源IP或时间窗口关联多条日志，还原攻击链路。识别同一攻击者的多步行为（如先扫描后入侵）。返回关联事件时间线。")
+    public String correlateEvents(
+            @ToolParam(description = "源IP地址，可选") String srcIp,
+            @ToolParam(description = "时间范围（分钟），默认30", required = false) Integer timeRangeMinutes) {
+
+        int minutes = timeRangeMinutes != null ? timeRangeMinutes : 30;
+
+        log.info("Tool correlateEvents: srcIp={}, timeRangeMinutes={}", srcIp, minutes);
+
+        Map<String, List<Map<String, Object>>> ipGroupedLogs = new HashMap<>();
+        int totalLogs = 0;
+
+        if (srcIp != null && !srcIp.isEmpty()) {
+            // 按源IP查询
+            Map<String, Object> result = logServiceClient.getSecurityLogs(srcIp, null, 1, 100);
+            List<Map<String, Object>> logs = extractRecords(result);
+            ipGroupedLogs.put(srcIp, logs);
+            totalLogs = logs.size();
+        } else {
+            // 查询最近 ERROR / WARN 日志，按 srcIp 分组
+            Map<String, Object> errorResult = logServiceClient.searchLogs("ERROR", null, null, null, 1, 100);
+            Map<String, Object> warnResult = logServiceClient.searchLogs("WARN", null, null, null, 1, 100);
+            List<Map<String, Object>> allLogs = new ArrayList<>();
+            allLogs.addAll(extractRecords(errorResult));
+            allLogs.addAll(extractRecords(warnResult));
+            totalLogs = allLogs.size();
+
+            for (Map<String, Object> logEntry : allLogs) {
+                String ip = logEntry.get("srcIp") != null ? String.valueOf(logEntry.get("srcIp")) : null;
+                if (ip != null && !ip.isEmpty() && !"null".equals(ip)) {
+                    ipGroupedLogs.computeIfAbsent(ip, k -> new ArrayList<>()).add(logEntry);
+                }
+            }
+        }
+
+        // 取日志数最多的 Top 5 IP
+        List<Map.Entry<String, List<Map<String, Object>>>> topEntries = new ArrayList<>();
+        ipGroupedLogs.entrySet().stream()
+                .sorted((a, b) -> b.getValue().size() - a.getValue().size())
+                .limit(5)
+                .forEach(topEntries::add);
+
+        // 构造每个 IP 的攻击链分析
+        List<Map<String, Object>> correlations = new ArrayList<>();
+        for (Map.Entry<String, List<Map<String, Object>>> entry : topEntries) {
+            String ip = entry.getKey();
+            List<Map<String, Object>> logs = entry.getValue();
+
+            Map<String, Object> correlation = new HashMap<>();
+            correlation.put("srcIp", ip);
+            correlation.put("eventCount", logs.size());
+
+            // 识别攻击模式
+            List<String> patterns = new ArrayList<>();
+
+            // 端口扫描：访问多个不同端口
+            long distinctPorts = logs.stream()
+                    .map(l -> l.get("dstPort"))
+                    .filter(p -> p != null)
+                    .distinct()
+                    .count();
+            if (distinctPorts >= 5) {
+                patterns.add("端口扫描(" + distinctPorts + " 个端口)");
+            }
+
+            // 暴力破解：多次 deny/blocked
+            long denyCnt = logs.stream()
+                    .map(l -> l.get("action") != null ? String.valueOf(l.get("action")) : "")
+                    .filter(a -> "deny".equalsIgnoreCase(a) || "blocked".equalsIgnoreCase(a))
+                    .count();
+            if (denyCnt >= 3) {
+                patterns.add("暴力破解(" + denyCnt + " 次 deny/blocked)");
+            }
+
+            // SQL 注入特征
+            long sqlInjectionCnt = logs.stream()
+                    .map(l -> l.get("content") != null ? String.valueOf(l.get("content")).toLowerCase() : "")
+                    .filter(c -> c.contains("union select") || c.contains("' or '") || c.contains("or 1=1"))
+                    .count();
+            if (sqlInjectionCnt > 0) {
+                patterns.add("SQL注入特征(" + sqlInjectionCnt + " 次)");
+            }
+
+            // XSS 特征
+            long xssCnt = logs.stream()
+                    .map(l -> l.get("content") != null ? String.valueOf(l.get("content")).toLowerCase() : "")
+                    .filter(c -> c.contains("<script") || c.contains("javascript:"))
+                    .count();
+            if (xssCnt > 0) {
+                patterns.add("XSS攻击特征(" + xssCnt + " 次)");
+            }
+
+            correlation.put("patterns", patterns);
+            correlation.put("timeline", logs);
+            if (!logs.isEmpty()) {
+                correlation.put("firstEvent", logs.get(0).get("logTime"));
+                correlation.put("lastEvent", logs.get(logs.size() - 1).get("logTime"));
+            }
+            correlations.add(correlation);
+        }
+
+        // 按事件数倒序
+        correlations.sort((a, b) -> ((Integer) b.get("eventCount")) - ((Integer) a.get("eventCount")));
+
+        // 构造人类可读文本
+        StringBuilder sb = new StringBuilder();
+        sb.append("安全事件关联分析（最近 ").append(minutes).append(" 分钟）\n\n");
+        if (srcIp != null && !srcIp.isEmpty()) {
+            sb.append("目标源IP: ").append(srcIp).append("\n");
+        }
+        sb.append("分析IP数: ").append(topEntries.size()).append("\n");
+        sb.append("关联日志总数: ").append(totalLogs).append("\n\n");
+
+        if (correlations.isEmpty()) {
+            sb.append("未找到可关联的事件\n");
+        } else {
+            sb.append("=== 攻击链分析 ===\n");
+            for (int i = 0; i < correlations.size(); i++) {
+                Map<String, Object> c = correlations.get(i);
+                sb.append(i + 1).append(". 源IP: ").append(c.get("srcIp"))
+                  .append("（").append(c.get("eventCount")).append(" 条事件）\n");
+                if (c.get("firstEvent") != null) {
+                    sb.append("   时间范围: ").append(c.get("firstEvent"))
+                      .append(" → ").append(c.get("lastEvent")).append("\n");
+                }
+                @SuppressWarnings("unchecked")
+                List<String> patterns = (List<String>) c.get("patterns");
+                if (patterns != null && !patterns.isEmpty()) {
+                    sb.append("   攻击模式: ").append(String.join(", ", patterns)).append("\n");
+                } else {
+                    sb.append("   攻击模式: 未识别明显模式\n");
+                }
+                sb.append("\n");
+            }
+
+            sb.append("=== 时间线 ===\n");
+            for (Map<String, Object> c : correlations) {
+                sb.append("[").append(c.get("srcIp")).append("]\n");
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> timeline = (List<Map<String, Object>>) c.get("timeline");
+                for (Map<String, Object> logEntry : timeline) {
+                    sb.append("  [").append(logEntry.get("logTime")).append("] ")
+                      .append("[").append(logEntry.get("logLevel")).append("] ");
+                    if (logEntry.get("action") != null) {
+                        sb.append("[").append(logEntry.get("action")).append("] ");
+                    }
+                    sb.append(logEntry.get("content")).append("\n");
+                }
+                sb.append("\n");
+            }
+        }
+
+        // 追加 correlation 结构化块：前端渲染攻击链时间线
+        Map<String, Object> toolData = new HashMap<>();
+        toolData.put("timeRangeMinutes", minutes);
+        toolData.put("srcIp", srcIp);
+        toolData.put("ipCount", topEntries.size());
+        toolData.put("totalLogs", totalLogs);
+        toolData.put("correlations", correlations);
+        return appendToolBlock(sb.toString(), "correlation", toolData);
+    }
+
     // ========== 格式化方法 ==========
 
     /**
@@ -273,5 +588,20 @@ public class LogAnalysisTools {
         return java.util.Arrays.stream(text.split("\n"))
                 .map(line -> "  " + line)
                 .collect(Collectors.joining("\n"));
+    }
+
+    /** 从分页查询响应中提取 records 列表 */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> extractRecords(Map<String, Object> result) {
+        if (result == null) return List.of();
+        Object data = result.get("data");
+        if (data instanceof Map) {
+            Map<?, ?> pageData = (Map<?, ?>) data;
+            Object records = pageData.get("records");
+            if (records instanceof List) {
+                return (List<Map<String, Object>>) records;
+            }
+        }
+        return List.of();
     }
 }
