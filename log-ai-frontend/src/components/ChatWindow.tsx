@@ -40,12 +40,24 @@ export default function ChatWindow() {
 
     const userMsg = emptyMessage('user', text)
     const aiMsg = emptyMessage('assistant')
+    // 构造历史上下文：排除欢迎语、pending、error、空内容消息
+    const history = messages
+      .filter(
+        (m) =>
+          m.id !== 'welcome' &&
+          !m.pending &&
+          !m.error &&
+          m.content &&
+          m.content.trim(),
+      )
+      .map((m) => ({ role: m.role, content: m.content }))
+
     setMessages((prev) => [...prev, userMsg, aiMsg])
     setInput('')
     setLoading(true)
 
     try {
-      const resp = await sendMessage(text)
+      const resp = await sendMessage(text, history)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === aiMsg.id ? { ...m, content: resp, pending: false } : m,

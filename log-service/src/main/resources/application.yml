@@ -6,13 +6,9 @@ spring:
     name: log-service
   datasource:
     url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    # driver-class-name 已删除：Spring Boot 可从 jdbc url 自动推断
     username: root
     password: "123456"
-#  h2:
-#    console:
-#      enabled: true
-#      path: /h2-console
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
@@ -23,7 +19,6 @@ mybatis-plus:
       table-underline: true
   configuration:
     map-underscore-to-camel-case: true
-#    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
     log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
 
 logging:
@@ -33,7 +28,9 @@ logging:
 
 log:
   watch:
-    directory: D:/zyjk/log-ai/logs
+    # 监听目录（逗号分隔，支持多目录）
+    # 示例：D:/zyjk/testlog,D:/my-project/logs
+    directories: D:/zyjk/testlog
     poll-interval-ms: 500
     # 单部署建议开启：过滤监控平台自身组件日志，防止反馈循环
     # 多部署（监控与被监控分离）可关闭，完整采集自身日志
