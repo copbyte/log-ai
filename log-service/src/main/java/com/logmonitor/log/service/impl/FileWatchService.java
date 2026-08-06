@@ -110,7 +110,8 @@ public class FileWatchService {
             WatchService ws = FileSystems.getDefault().newWatchService();
             path.register(ws,
                     StandardWatchEventKinds.ENTRY_CREATE,
-                    StandardWatchEventKinds.ENTRY_MODIFY);
+                    StandardWatchEventKinds.ENTRY_MODIFY,
+                    StandardWatchEventKinds.ENTRY_DELETE);
             watchServices.add(ws);
             watchPaths.add(path);
             log.info("FileWatchService started, watching directory: {}", path.toAbsolutePath());
@@ -145,13 +146,24 @@ public class FileWatchService {
                 Path filePath = watchPath.resolve(filename);
 
                 try {
+                    String abs = filePath.toAbsolutePath().toString();
+
+                    if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
+                        // 文件被删除/移走：清理 H2 偏移量记录、内存缓存、Parser 绑定，
+                        // 防止长期运行后 H2 表与内存缓存无限增长
+                        offsetStore.delete(abs);
+                        offsetCache.remove(abs);
+                        parserRegistry.unbind(abs);
+                        log.info("File deleted, cleaned offset/parser binding: {}", abs);
+                        continue;
+                    }
+
                     if (Files.isDirectory(filePath) || !Files.isReadable(filePath)) {
                         continue;
                     }
 
                     if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
                         // 新建文件：偏移量归零，清除 Parser 绑定
-                        String abs = filePath.toAbsolutePath().toString();
                         offsetCache.put(abs, 0L);
                         parserRegistry.unbind(abs);
                     }
