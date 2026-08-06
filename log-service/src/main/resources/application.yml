@@ -36,3 +36,11 @@ log:
     # 多部署（监控与被监控分离）可关闭，完整采集自身日志
     filter-self-logs: true
     self-log-classes: com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService
+  # Syslog 采集（态势感知扩展，接收防火墙/IDS 等网络设备日志）
+  syslog:
+    enabled: true
+    port: 5140
+    buffer-size: 5000
+  # 模拟安全日志生成器（面试演示用，生产环境关闭）
+  simulator:
+    enabled: true

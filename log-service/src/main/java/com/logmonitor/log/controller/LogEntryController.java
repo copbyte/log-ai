@@ -34,10 +34,12 @@ public class LogEntryController {
             @RequestParam(name = "keyword", required = false) String keyword,
             @RequestParam(name = "traceId", required = false) String traceId,
             @RequestParam(name = "serviceName", required = false) String serviceName,
-            @RequestParam(name = "logSource", required = false) String logSource) {
+            @RequestParam(name = "logSource", required = false) String logSource,
+            @RequestParam(name = "srcIp", required = false) String srcIp,
+            @RequestParam(name = "action", required = false) String action) {
         return Result.success(logEntryService.pageWithFilters(
                 new Page<>(page, size), logLevel, className, fileName, threadName,
-                startTime, endTime, keyword, traceId, serviceName, logSource));
+                startTime, endTime, keyword, traceId, serviceName, logSource, srcIp, action));
     }
 
     @GetMapping("/entries/{id}")

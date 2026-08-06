@@ -27,11 +27,19 @@ public class LogEntryServiceImpl extends ServiceImpl<LogEntryMapper, LogEntry> i
                                            String keyword,
                                            String traceId,
                                            String serviceName,
-                                           String logSource) {
+                                           String logSource,
+                                           String srcIp,
+                                           String action) {
         LambdaQueryWrapper<LogEntry> wrapper = new LambdaQueryWrapper<>();
 
         if (StringUtils.hasText(logLevel)) {
             wrapper.eq(LogEntry::getLogLevel, logLevel.toUpperCase());
+        }
+        if (StringUtils.hasText(srcIp)) {
+            wrapper.eq(LogEntry::getSrcIp, srcIp);
+        }
+        if (StringUtils.hasText(action)) {
+            wrapper.eq(LogEntry::getAction, action);
         }
         if (StringUtils.hasText(className)) {
             wrapper.like(LogEntry::getClassName, className);

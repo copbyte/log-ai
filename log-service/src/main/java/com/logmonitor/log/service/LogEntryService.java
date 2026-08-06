@@ -23,7 +23,9 @@ public interface LogEntryService extends IService<LogEntry> {
                                      String keyword,
                                      String traceId,
                                      String serviceName,
-                                     String logSource);
+                                     String logSource,
+                                     String srcIp,
+                                     String action);
 
     /**
      * 按 TraceID 查询关联日志（按时间升序）

@@ -69,4 +69,49 @@ public class LogServiceClient {
                 .retrieve()
                 .body(Map.class);
     }
+
+    /**
+     * 查询告警统计
+     */
+    public Map<String, Object> getAlertStats() {
+        return restClient.get()
+                .uri("/api/alert/stats")
+                .retrieve()
+                .body(Map.class);
+    }
+
+    /**
+     * 分页查询告警列表（可按状态、严重级别筛选）
+     */
+    public Map<String, Object> getAlerts(String status, Integer severity, int page, int size) {
+        return restClient.get()
+                .uri(uriBuilder -> {
+                    uriBuilder.path("/api/alert")
+                            .queryParam("page", page)
+                            .queryParam("size", size);
+                    if (status != null) uriBuilder.queryParam("status", status);
+                    if (severity != null) uriBuilder.queryParam("severity", severity);
+                    return uriBuilder.build();
+                })
+                .retrieve()
+                .body(Map.class);
+    }
+
+    /**
+     * 查询安全日志（按源IP、动作筛选）
+     * 注：log-service 的 /api/log/entries 需支持 srcIp、action 参数
+     */
+    public Map<String, Object> getSecurityLogs(String srcIp, String action, int page, int size) {
+        return restClient.get()
+                .uri(uriBuilder -> {
+                    uriBuilder.path("/api/log/entries")
+                            .queryParam("page", page)
+                            .queryParam("size", size);
+                    if (srcIp != null) uriBuilder.queryParam("srcIp", srcIp);
+                    if (action != null) uriBuilder.queryParam("action", action);
+                    return uriBuilder.build();
+                })
+                .retrieve()
+                .body(Map.class);
+    }
 }
