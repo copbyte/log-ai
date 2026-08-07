@@ -14,6 +14,10 @@
 /logs/
 *.log
 
+# H2 偏移量数据库
+/log-service/data/
+/data/
+
 # 前端
 /log-ai-frontend/node_modules/
 /log-ai-frontend/dist/

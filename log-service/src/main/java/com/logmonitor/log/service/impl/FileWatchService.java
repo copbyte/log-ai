@@ -208,6 +208,7 @@ public class FileWatchService {
             List<LogEntry> sub = new ArrayList<>(batch.subList(i, end));
             try {
                 logEntryService.saveBatch(sub, sub.size());
+                // 批次后置处理（预留扩展点）：当前为空实现，后续 WebSocket 推送/MQ 分发/AI 分析在此接入
                 logBatchProcessor.processBatchAsync(sub);
             } catch (Exception e) {
                 log.error("批量保存日志失败，本批{}条（{}-{}）", sub.size(), i, end, e);

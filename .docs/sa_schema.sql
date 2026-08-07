@@ -49,13 +49,17 @@ CREATE TABLE IF NOT EXISTS alert (
     INDEX idx_alert_severity (severity),
     INDEX idx_alert_status (status),
     INDEX idx_alert_create_time (create_time),
-    INDEX idx_alert_src_ip (src_ip)
+    INDEX idx_alert_src_ip (src_ip),
+    UNIQUE KEY uk_alert_rule_entry (rule_id, log_entry_id)
 ) COMMENT='安全告警表';
+
+-- 幂等兜底：同一规则对同一日志只生成一条告警（MATCH 类型），THRESHOLD 告警 log_entry_id 为 NULL 不受唯一约束影响
+-- 存量环境（已建表）执行：ALTER TABLE alert ADD UNIQUE INDEX uk_alert_rule_entry (rule_id, log_entry_id);
 
 -- 4. 预置规则（面试演示用）
 INSERT INTO rule (name, description, rule_type, condition_field, condition_op, condition_value, threshold, time_window_sec, severity) VALUES
 ('暴力破解检测', '1分钟内同一源IP被防火墙拒绝5次以上', 'THRESHOLD', 'action', 'EQ', 'deny', 5, 60, 7),
-('端口扫描检测', '1分钟内同一源IP访问不同端口10次以上', 'THRESHOLD', 'src_ip', 'EQ', '*', 10, 60, 6),
+('端口扫描检测', '日志内容包含端口扫描特征', 'MATCH', 'content', 'CONTAINS', 'port scan', 1, 60, 6),
 ('SQL注入检测', '日志内容包含SQL注入特征', 'MATCH', 'content', 'CONTAINS', "union select", 1, 60, 8),
 ('XSS攻击检测', '日志内容包含XSS攻击特征', 'MATCH', 'content', 'CONTAINS', '<script>', 1, 60, 8),
 ('ERROR日志激增', '5分钟内ERROR日志超过20条', 'THRESHOLD', 'log_level', 'EQ', 'ERROR', 20, 300, 5);

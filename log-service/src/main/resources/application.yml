@@ -5,7 +5,8 @@ spring:
   application:
     name: log-service
   datasource:
-    url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    # rewriteBatchedStatements=true: MySQL 驱动将批量 INSERT 合并为多值 INSERT，让 saveBatch 真正批量执行
     # driver-class-name 已删除：Spring Boot 可从 jdbc url 自动推断
     username: root
     password: "123456"
