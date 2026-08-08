@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.logmonitor.common.entity.LogEntry;
 import com.logmonitor.common.result.Result;
+import com.logmonitor.log.audit.AuditLog;
 import com.logmonitor.log.service.LogEntryService;
+import com.logmonitor.log.ratelimit.RateLimit;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,6 +24,8 @@ public class LogEntryController {
     }
 
     @GetMapping("/entries")
+    @RateLimit(limit = 60, windowSeconds = 10, key = "log:entries")
+    @AuditLog(operation = "LOG_QUERY")
     public Result<IPage<LogEntry>> page(
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "size", defaultValue = "20") int size,
@@ -49,6 +53,8 @@ public class LogEntryController {
 
     /** 按 TraceID 查询关联日志（链路日志聚合） */
     @GetMapping("/trace/{traceId}")
+    @RateLimit(limit = 30, windowSeconds = 10, key = "log:trace")
+    @AuditLog(operation = "LOG_TRACE_QUERY")
     public Result<List<LogEntry>> getByTraceId(@PathVariable("traceId") String traceId) {
         return Result.success(logEntryService.getLogsByTraceId(traceId));
     }

@@ -23,14 +23,25 @@ spring:
       base-url: https://api.deepseek.com
       chat:
         options:
-          model: deepseek-v4-pro
-          temperature: 0.7
+          model: deepseek-v4-flash
+          temperature: 0.3
 
 # log-service 地址
 log-service:
   url: http://localhost:8081
+  # 服务间调用令牌（与 log-service app.security.service-token 保持一致）
+  token: ${LOG_SERVICE_TOKEN:service-token-demo}
 
 logging:
   level:
     com.logmonitor.mcp: INFO
     org.springframework.ai: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always

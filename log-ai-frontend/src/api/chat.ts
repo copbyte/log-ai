@@ -1,6 +1,17 @@
 import type { Message, Role } from '@/types'
+import { clearToken, getToken } from '@/api/auth'
 
 const CHAT_URL = '/api/chat'
+
+/** 带 JWT 的请求头：mcp-server 上报审计时转发该令牌，让 log-service 记录真实用户 */
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = getToken()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
 
 /**
  * 历史消息条目（与后端 ChatController.ChatMessage 对应）
@@ -8,6 +19,49 @@ const CHAT_URL = '/api/chat'
 export interface ChatHistoryItem {
   role: Role
   content: string
+}
+
+/** 持久化后的对话历史条目（与后端 ChatHistory 实体对应） */
+export interface ChatHistoryRecord {
+  id: number
+  username: string
+  role: Role
+  content: string
+  createTime: string
+}
+
+/** 对话历史分页结果 */
+export interface ChatHistoryPage {
+  records: ChatHistoryRecord[]
+  total: number
+  current: number
+  size: number
+}
+
+/**
+ * 分页查询当前用户的对话历史（仅能查到自己，后端按 JWT 隔离）
+ * 后端链路：mcp-server GET /api/chat/history -> log-service GET /api/chat-history
+ */
+export async function fetchChatHistory(
+  page = 1,
+  size = 20,
+): Promise<ChatHistoryPage> {
+  const resp = await fetch(`/api/chat/history?page=${page}&size=${size}`, {
+    headers: authHeaders(),
+  })
+  if (resp.status === 401) {
+    clearToken()
+    window.dispatchEvent(new Event('auth:expired'))
+    throw new Error('登录已过期，请重新登录')
+  }
+  if (!resp.ok) {
+    throw new Error(`历史记录请求失败: ${resp.status} ${resp.statusText}`)
+  }
+  const json = await resp.json()
+  if (json.code !== 0 && json.code !== 200) {
+    throw new Error(json.message || `业务错误: ${json.code}`)
+  }
+  return json.data as ChatHistoryPage
 }
 
 /**
@@ -25,7 +79,7 @@ export async function sendMessage(
 ): Promise<string> {
   const resp = await fetch(CHAT_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ message, history }),
   })
   if (!resp.ok) {
@@ -57,7 +111,7 @@ export async function streamMessage(
 ): Promise<void> {
   const resp = await fetch('/api/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ message, history }),
     signal,
   })

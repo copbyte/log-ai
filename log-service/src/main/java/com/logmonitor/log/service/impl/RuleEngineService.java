@@ -10,21 +10,34 @@ import com.logmonitor.log.mapper.LogEntryMapper;
 import com.logmonitor.log.mapper.RuleMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 规则引擎核心：定时扫描日志，匹配规则，生成告警
+ * <p>
+ * 性能优化：
+ * <ul>
+ *   <li>MATCH：一次批量查询该规则已有告警的 logEntryId 做内存去重，避免逐条 SELECT COUNT（原 N+1）；</li>
+ *   <li>THRESHOLD：聚合下推 SQL（GROUP BY src_ip + HAVING COUNT &gt;= threshold），不再把窗口内全部日志加载到内存；</li>
+ *   <li>幂等：alert 表 (rule_id, log_entry_id) 唯一索引兜底，防止并发/重试产生重复告警。</li>
+ * </ul>
+ * <p>
+ * 启用流式规则引擎（log.rule-engine.streaming.enabled=true）时本类不创建，
+ * 告警由 StreamingRuleEngine 在日志入库后实时判定；此处作为每分钟 SQL 扫描的降级方案。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "log.rule-engine.streaming.enabled", havingValue = "false", matchIfMissing = true)
 public class RuleEngineService {
 
     private final RuleMapper ruleMapper;
@@ -66,22 +79,31 @@ public class RuleEngineService {
     }
 
     /**
-     * MATCH 类型：查询时间窗口内匹配条件的日志，每条匹配日志生成一条 Alert
-     * 去重：同一规则+同一 srcIp+同一 logEntryId 不重复告警
+     * MATCH 类型：查询时间窗口内匹配条件的日志，每条匹配日志生成一条 Alert。
+     * 去重：一次性加载该规则已有告警的 logEntryId，内存过滤，避免逐条 COUNT 查询。
      */
     private int executeMatchRule(Rule rule) {
         LocalDateTime since = LocalDateTime.now().minusSeconds(rule.getTimeWindowSec());
-        LambdaQueryWrapper<LogEntry> wrapper = buildLogQueryWrapper(rule, since);
-        List<LogEntry> matchedLogs = logEntryMapper.selectList(wrapper);
+        List<LogEntry> matchedLogs = logEntryMapper.selectList(buildLogQueryWrapper(rule, since));
+        if (matchedLogs.isEmpty()) {
+            return 0;
+        }
+
+        Set<Long> alertedLogEntryIds = alertMapper.selectList(
+                        new LambdaQueryWrapper<Alert>()
+                                .eq(Alert::getRuleId, rule.getId())
+                                .isNotNull(Alert::getLogEntryId)
+                                .select(Alert::getLogEntryId))
+                .stream()
+                .map(Alert::getLogEntryId)
+                .collect(Collectors.toSet());
 
         int alertCount = 0;
         for (LogEntry logEntry : matchedLogs) {
-            String srcIp = logEntry.getSrcIp();
-            // 去重：同一规则+同一 srcIp+同一 logEntryId 不重复告警
-            if (hasAlert(rule.getId(), srcIp, logEntry.getId())) {
+            if (alertedLogEntryIds.contains(logEntry.getId())) {
                 continue;
             }
-            Alert alert = buildAlert(rule, srcIp, logEntry.getId(),
+            Alert alert = buildAlert(rule, logEntry.getSrcIp(), logEntry.getId(),
                     String.format("规则[%s]匹配到日志: %s", rule.getName(), truncate(logEntry.getContent(), 200)));
             alertMapper.insert(alert);
             alertCount++;
@@ -90,35 +112,37 @@ public class RuleEngineService {
     }
 
     /**
-     * THRESHOLD 类型：查询时间窗口内匹配条件的日志数量（按 srcIp 分组），
-     * 若某 srcIp 命中次数 >= threshold，则生成一条汇总告警
-     * 去重：同一规则+同一 srcIp 在时间窗口内不重复告警
+     * THRESHOLD 类型：按 srcIp 分组统计窗口内命中次数，次数 &gt;= threshold 生成汇总告警。
+     * 聚合下推 SQL（GROUP BY + HAVING），只把分组结果加载到内存。
      */
     private int executeThresholdRule(Rule rule) {
         LocalDateTime since = LocalDateTime.now().minusSeconds(rule.getTimeWindowSec());
-        LambdaQueryWrapper<LogEntry> wrapper = buildLogQueryWrapper(rule, since);
-        List<LogEntry> matchedLogs = logEntryMapper.selectList(wrapper);
-
-        // 按 srcIp 分组统计
-        Map<String, Integer> srcIpCount = new HashMap<>();
-        for (LogEntry logEntry : matchedLogs) {
-            String srcIp = logEntry.getSrcIp() != null ? logEntry.getSrcIp() : "unknown";
-            srcIpCount.merge(srcIp, 1, Integer::sum);
+        String column = toColumn(rule.getConditionField());
+        String op = toSqlOp(rule.getConditionOp());
+        String value = rule.getConditionValue();
+        if (column == null || op == null || !StringUtils.hasText(value)) {
+            log.warn("规则[{}]条件无效: field={}, op={}, value={}",
+                    rule.getName(), rule.getConditionField(), rule.getConditionOp(), value);
+            return 0;
+        }
+        if ("LIKE".equals(op)) {
+            value = "%" + value + "%";
         }
 
+        List<Map<String, Object>> grouped =
+                logEntryMapper.countGroupBySrcIp(since, column, op, value, rule.getThreshold());
+
         int alertCount = 0;
-        for (Map.Entry<String, Integer> entry : srcIpCount.entrySet()) {
-            String srcIp = entry.getKey();
-            int count = entry.getValue();
-            if (count < rule.getThreshold()) {
-                continue;
-            }
-            // 去重：同一规则+同一 srcIp 在时间窗口内不重复告警
+        for (Map<String, Object> row : grouped) {
+            Object srcIpObj = row.get("srcIp");
+            String srcIp = srcIpObj != null ? String.valueOf(srcIpObj) : "unknown";
+            long count = ((Number) row.get("cnt")).longValue();
+            // 去重：同一规则 + 同一 srcIp 在时间窗口内不重复告警
             if (hasAlertInWindow(rule.getId(), srcIp, rule.getTimeWindowSec())) {
                 continue;
             }
             Alert alert = buildAlert(rule, srcIp, null,
-                    String.format("规则[%s]阈值告警: 源IP %s 在 %d 秒内触发 %d 次（阈值 %d）",
+                    String.format("规则[%s]阈值告警: 源IP %s 在 %d 秒内触发 %d 次（阈值:%d）",
                             rule.getName(), srcIp, rule.getTimeWindowSec(), count, rule.getThreshold()));
             alertMapper.insert(alert);
             alertCount++;
@@ -126,7 +150,7 @@ public class RuleEngineService {
         return alertCount;
     }
 
-    /** 构建 LogEntry 查询条件：时间窗口 + 规则条件 */
+    /** 构建 LogEntry 查询条件：时间窗口 + 规则条件（MATCH 用） */
     private LambdaQueryWrapper<LogEntry> buildLogQueryWrapper(Rule rule, LocalDateTime since) {
         LambdaQueryWrapper<LogEntry> wrapper = new LambdaQueryWrapper<>();
         wrapper.ge(LogEntry::getLogTime, since);
@@ -184,17 +208,36 @@ public class RuleEngineService {
         }
     }
 
-    /** 检查是否已有告警（MATCH 去重：rule + srcIp + logEntryId） */
-    private boolean hasAlert(Long ruleId, String srcIp, Long logEntryId) {
-        LambdaQueryWrapper<Alert> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Alert::getRuleId, ruleId);
-        if (srcIp != null) {
-            wrapper.eq(Alert::getSrcIp, srcIp);
+    /** 规则条件字段 → SQL 列名（白名单映射，防止 SQL 注入） */
+    private String toColumn(String field) {
+        switch (field) {
+            case "src_ip":
+            case "log_level":
+            case "action":
+            case "service_name":
+            case "content":
+                return field;
+            default:
+                return null;
         }
-        if (logEntryId != null) {
-            wrapper.eq(Alert::getLogEntryId, logEntryId);
+    }
+
+    /** 规则操作符 → SQL 操作符（白名单映射） */
+    private String toSqlOp(String op) {
+        switch (op) {
+            case "EQ":
+                return "=";
+            case "NE":
+                return "<>";
+            case "CONTAINS":
+                return "LIKE";
+            case "GT":
+                return ">";
+            case "LT":
+                return "<";
+            default:
+                return null;
         }
-        return alertMapper.selectCount(wrapper) > 0;
     }
 
     /** 检查时间窗口内是否已有告警（THRESHOLD 去重：rule + srcIp） */

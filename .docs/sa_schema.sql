@@ -49,13 +49,42 @@ CREATE TABLE IF NOT EXISTS alert (
     INDEX idx_alert_severity (severity),
     INDEX idx_alert_status (status),
     INDEX idx_alert_create_time (create_time),
-    INDEX idx_alert_src_ip (src_ip)
+    INDEX idx_alert_src_ip (src_ip),
+    UNIQUE KEY uk_alert_rule_entry (rule_id, log_entry_id)
 ) COMMENT='安全告警表';
+
+-- 幂等兜底：同一规则对同一日志只生成一条告警（MATCH 类型），THRESHOLD 告警 log_entry_id 为 NULL 不受唯一约束影响
+-- 存量环境（已建表）执行：ALTER TABLE alert ADD UNIQUE INDEX uk_alert_rule_entry (rule_id, log_entry_id);
 
 -- 4. 预置规则（面试演示用）
 INSERT INTO rule (name, description, rule_type, condition_field, condition_op, condition_value, threshold, time_window_sec, severity) VALUES
 ('暴力破解检测', '1分钟内同一源IP被防火墙拒绝5次以上', 'THRESHOLD', 'action', 'EQ', 'deny', 5, 60, 7),
-('端口扫描检测', '1分钟内同一源IP访问不同端口10次以上', 'THRESHOLD', 'src_ip', 'EQ', '*', 10, 60, 6),
+('端口扫描检测', '日志内容包含端口扫描特征', 'MATCH', 'content', 'CONTAINS', 'port scan', 1, 60, 6),
 ('SQL注入检测', '日志内容包含SQL注入特征', 'MATCH', 'content', 'CONTAINS', "union select", 1, 60, 8),
 ('XSS攻击检测', '日志内容包含XSS攻击特征', 'MATCH', 'content', 'CONTAINS', '<script>', 1, 60, 8),
 ('ERROR日志激增', '5分钟内ERROR日志超过20条', 'THRESHOLD', 'log_level', 'EQ', 'ERROR', 20, 300, 5);
+
+-- 5. 审计日志表（安全审计）
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) COMMENT '操作用户（服务间调用为 service）',
+    operation VARCHAR(50) NOT NULL COMMENT '操作类型: LOGIN/LOG_QUERY/ALERT_ACK/RULE_CREATE/AI_CHAT 等',
+    params TEXT COMMENT '请求参数摘要（已脱敏截断）',
+    result VARCHAR(10) NOT NULL COMMENT '结果: SUCCESS/FAIL',
+    error_message VARCHAR(500) COMMENT '失败原因',
+    ip VARCHAR(45) COMMENT '来源 IP',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_username (username),
+    INDEX idx_audit_operation (operation),
+    INDEX idx_audit_create_time (create_time)
+) COMMENT='安全审计日志表';
+
+-- 6. AI 对话历史表（按用户隔离）
+CREATE TABLE IF NOT EXISTS chat_history (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL COMMENT '归属用户（由登录态决定）',
+    role VARCHAR(20) NOT NULL COMMENT '消息角色: user/assistant',
+    content TEXT NOT NULL COMMENT '消息内容（用户问题或 AI 回答）',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_chat_history_username_time (username, create_time)
+) COMMENT='AI 对话历史表';

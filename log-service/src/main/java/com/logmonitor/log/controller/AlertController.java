@@ -3,6 +3,8 @@ package com.logmonitor.log.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.logmonitor.common.entity.Alert;
 import com.logmonitor.common.result.Result;
+import com.logmonitor.log.audit.AuditLog;
+import com.logmonitor.log.ratelimit.RateLimit;
 import com.logmonitor.log.service.AlertService;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,6 +25,7 @@ public class AlertController {
 
     /** 分页查询告警 */
     @GetMapping
+    @RateLimit(limit = 60, windowSeconds = 10, key = "alert:page")
     public Result<IPage<Alert>> page(
             @RequestParam(name = "status", required = false) String status,
             @RequestParam(name = "severity", required = false) Integer severity,
@@ -33,6 +36,7 @@ public class AlertController {
 
     /** 告警统计 */
     @GetMapping("/stats")
+    @RateLimit(limit = 30, windowSeconds = 10, key = "alert:stats")
     public Result<Map<String, Object>> stats() {
         return Result.success(alertService.getAlertStats());
     }
@@ -45,6 +49,7 @@ public class AlertController {
 
     /** 确认告警 */
     @PutMapping("/{id}/ack")
+    @AuditLog(operation = "ALERT_ACK")
     public Result<Void> ack(@PathVariable("id") Long id) {
         alertService.ackAlert(id);
         return Result.success();
@@ -52,6 +57,7 @@ public class AlertController {
 
     /** 解决告警 */
     @PutMapping("/{id}/resolve")
+    @AuditLog(operation = "ALERT_RESOLVE")
     public Result<Void> resolve(@PathVariable("id") Long id) {
         alertService.resolveAlert(id);
         return Result.success();

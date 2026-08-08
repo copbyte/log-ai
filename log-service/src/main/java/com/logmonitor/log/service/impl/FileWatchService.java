@@ -3,7 +3,7 @@ package com.logmonitor.log.service.impl;
 import com.logmonitor.common.entity.LogEntry;
 import com.logmonitor.log.parser.LogParser;
 import com.logmonitor.log.parser.LogParserRegistry;
-import com.logmonitor.log.service.LogEntryService;
+import com.logmonitor.log.pipeline.LogPipeline;
 import com.logmonitor.log.store.FileOffsetStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,9 +26,9 @@ import java.util.stream.Collectors;
 /**
  * 日志文件监听服务
  * <p>
- * 核心职责：监听多个目录 → 增量读取新行 → Parser 解析 → 批量入库。
- * 偏移量持久化到 H2，重启不丢；Parser 自动适配多种日志格式；
- * 单次 batch 有上限，防 OOM。
+ * 核心职责：监控多个目录 → 增量读取新行 → Parser 解析 → 日志管道（Kafka/直连）落库。
+ * 偏移量持久化到 H2，重启不丢；管道发送成功后才推进偏移量（至少一次语义），失败下轮重读。
+ * Parser 自动适配多种日志格式；单次 batch 有上限，防 OOM。
  */
 @Slf4j
 @Service
@@ -40,25 +40,27 @@ public class FileWatchService {
             Pattern.CASE_INSENSITIVE
     );
 
-    /** 单次 batch 最大条数，防止 OOM */
+//     单次 batch 最大条数，防止 OOM
     private static final int MAX_BATCH_SIZE = 1000;
 
-    /** 单次读取最大行数，超出分多次 poll 读取，防止大文件首次入库 OOM */
+//    单次读取最大行数，超出分多次 poll 读取，防止大文件首次入库 OOM
     private static final int MAX_LINES_PER_READ = 5000;
 
-    /** 首次读取时取前 N 行做 Parser 探测 */
+//    首次读取时取前 N 行做 Parser 探测
     private static final int PROBE_SAMPLE_LINES = 10;
 
-    /** 偏移量 flush 到 H2 的间隔（毫秒） */
+//    偏移量 flush 到 H2 的间隔（毫秒）
     private static final long OFFSET_FLUSH_INTERVAL_MS = 10_000;
 
-    private final LogEntryService logEntryService;
-    private final LogBatchProcessor logBatchProcessor;
+    private final LogPipeline logPipeline;
     private final LogParserRegistry parserRegistry;
     private final FileOffsetStore offsetStore;
 
     /** 内存偏移量缓存，定时 flush 到 H2，避免每行都查 DB */
     private final Map<String, Long> offsetCache = new ConcurrentHashMap<>();
+
+    /** 本轮已读取、待管道确认成功后才提交的偏移量（防止发送失败丢日志） */
+    private final Map<String, Long> pendingOffsets = new ConcurrentHashMap<>();
 
     /** 多目录监听：每个目录一个 WatchService */
     private final List<WatchService> watchServices = new ArrayList<>();
@@ -71,18 +73,16 @@ public class FileWatchService {
     @Value("${log.watch.filter-self-logs:true}")
     private boolean filterSelfLogs;
 
-    /** 监控平台自身组件的全限定类名（逗号分隔），其产生的日志将不会被二次采集 */
+    /** 监控平台自身组件的全限定类名（逗号分隔），其产生的日志不会被二次采集 */
     @Value("${log.watch.self-log-classes:com.logmonitor.log.service.impl.LogBatchProcessor,com.logmonitor.log.service.impl.FileWatchService}")
     private String selfLogClasses;
 
     private volatile Set<String> selfLogClassSet;
 
-    public FileWatchService(LogEntryService logEntryService,
-                            LogBatchProcessor logBatchProcessor,
+    public FileWatchService(LogPipeline logPipeline,
                             LogParserRegistry parserRegistry,
                             FileOffsetStore offsetStore) {
-        this.logEntryService = logEntryService;
-        this.logBatchProcessor = logBatchProcessor;
+        this.logPipeline = logPipeline;
         this.parserRegistry = parserRegistry;
         this.offsetStore = offsetStore;
     }
@@ -98,9 +98,7 @@ public class FileWatchService {
         return selfLogClassSet;
     }
 
-    /**
-     * 启动多目录监听
-     */
+    /** 启动多目录监听 */
     public void startWatching(List<String> directories) throws IOException {
         for (String dir : directories) {
             Path path = Paths.get(dir);
@@ -124,7 +122,7 @@ public class FileWatchService {
             return;
         }
 
-        // 收集本轮所有待处理的日志条目，用于批量插入
+        // 收集本轮所有待处理的日志条目，用于批量持久化
         List<LogEntry> batch = new ArrayList<>();
 
         for (int i = 0; i < watchServices.size(); i++) {
@@ -153,6 +151,7 @@ public class FileWatchService {
                         // 防止长期运行后 H2 表与内存缓存无限增长
                         offsetStore.delete(abs);
                         offsetCache.remove(abs);
+                        pendingOffsets.remove(abs);
                         parserRegistry.unbind(abs);
                         log.info("File deleted, cleaned offset/parser binding: {}", abs);
                         continue;
@@ -163,8 +162,9 @@ public class FileWatchService {
                     }
 
                     if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                        // 新建文件：偏移量归零，清除 Parser 绑定
+                        // 新建文件：偏移量归零，清除 Parser 绑定与遗留的未提交偏移量
                         offsetCache.put(abs, 0L);
+                        pendingOffsets.remove(abs);
                         parserRegistry.unbind(abs);
                     }
 
@@ -177,15 +177,17 @@ public class FileWatchService {
             key.reset();
         }
 
-        // 批量持久化：分批写入，每批最多 MAX_BATCH_SIZE 条
+        // 批量持久化：分批发管道，每批最大 MAX_BATCH_SIZE 条
         if (!batch.isEmpty()) {
             persistBatch(batch);
+        } else if (!pendingOffsets.isEmpty()) {
+            // 本轮没有产生日志条目（空行/被过滤），无需落库，直接推进偏移量
+            offsetCache.putAll(pendingOffsets);
+            pendingOffsets.clear();
         }
     }
 
-    /**
-     * 定时将内存偏移量 flush 到 H2，避免进程崩溃丢失
-     */
+    /** 定时将内存偏移量 flush 到 H2，避免进程崩溃丢失 */
     @Scheduled(fixedDelay = OFFSET_FLUSH_INTERVAL_MS)
     public void flushOffsets() {
         if (offsetCache.isEmpty()) {
@@ -200,35 +202,44 @@ public class FileWatchService {
     }
 
     /**
-     * 分批写入数据库并触发批次后续处理
+     * 分批发管道并触发批次后置处理
+     * <p>
+     * 只有全部子批都成功才提交本轮偏移量；任一子批失败则整体不推进，下一轮从原偏移量重读
+     * （至少一次语义，可能产生少量重复，但不会丢日志）。
      */
     private void persistBatch(List<LogEntry> batch) {
         for (int i = 0; i < batch.size(); i += MAX_BATCH_SIZE) {
             int end = Math.min(i + MAX_BATCH_SIZE, batch.size());
             List<LogEntry> sub = new ArrayList<>(batch.subList(i, end));
             try {
-                logEntryService.saveBatch(sub, sub.size());
-                logBatchProcessor.processBatchAsync(sub);
+                logPipeline.persist(sub);
             } catch (Exception e) {
-                log.error("批量保存日志失败，本批{}条（{}-{}）", sub.size(), i, end, e);
+                log.error("批量持久化日志失败，本批{}条（{}-{}），偏移量不推进，下轮重读", sub.size(), i, end, e);
+                return;
             }
         }
+        offsetCache.putAll(pendingOffsets);
+        pendingOffsets.clear();
     }
 
-    /**
-     * 读取文件新增的行，解析后放入批次缓冲区
-     */
+    /** 读取文件新增的行，解析后放入批量缓冲 */
     private void readNewLines(Path filePath, List<LogEntry> buffer) throws IOException {
         String absolutePath = filePath.toAbsolutePath().toString();
         long lastOffset = offsetCache.computeIfAbsent(absolutePath, offsetStore::getOffset);
+        // 同一轮 poll 中可能对该文件产生多个事件，取最新（含未提交）偏移量，避免重复读取
+        Long pending = pendingOffsets.get(absolutePath);
+        if (pending != null) {
+            lastOffset = Math.max(lastOffset, pending);
+        }
 
         try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "r")) {
             long fileLength = raf.length();
             if (fileLength <= lastOffset) {
                 if (fileLength < lastOffset) {
-                    // 文件被截断/轮转，重置偏移量并清除 Parser 绑定
+                    // 文件被截断/轮转：重置偏移量并清除 Parser 绑定与未提交偏移量
                     offsetCache.put(absolutePath, 0L);
                     offsetStore.saveOffset(absolutePath, 0L);
+                    pendingOffsets.remove(absolutePath);
                     parserRegistry.unbind(absolutePath);
                     log.info("File truncated/rotated, reset offset: {}", absolutePath);
                 }
@@ -266,13 +277,12 @@ public class FileWatchService {
                 }
             }
 
-            offsetCache.put(absolutePath, raf.getFilePointer());
+            // 先记入待提交偏移量，等管道确认成功后再更新 offsetCache
+            pendingOffsets.put(absolutePath, raf.getFilePointer());
         }
     }
 
-    /**
-     * 使用绑定的 Parser 解析行，并补充公共字段（filePath/traceId/serviceName/logSource）
-     */
+    /** 使用绑定的 Parser 解析行，并补充公共字段（filePath/traceId/serviceName/logSource） */
     private LogEntry parseLine(String fileName, String line, String filePath, String absolutePath) {
         LogParser parser = parserRegistry.get(absolutePath);
         LogEntry entry = parser.parse(fileName, line);
@@ -303,9 +313,7 @@ public class FileWatchService {
         return fileName.endsWith(".log") ? fileName.substring(0, fileName.length() - 4) : fileName;
     }
 
-    /**
-     * 判断日志条目是否来自监控平台自身组件，防止单部署下的反馈循环
-     */
+    /** 判断日志条目是否来自监控平台自身组件，防止单部署下的反馈循环 */
     private boolean isSelfLog(LogEntry entry) {
         String className = entry.getClassName();
         return className != null && getSelfLogClassSet().contains(className);

@@ -29,7 +29,7 @@ public class LogEntry extends BaseEntity {
     private String traceId;
     /** 来源服务名 */
     private String serviceName;
-    /** 日志来源类型，对应 LogSource 枚举：FILE/SYSLOG/HTTP */
+    /** 日志来源类型，对应 LogSource 枚举：FILE/SYSLOG/CEF/HTTP/ELK/LOKI/MOCK */
     private String logSource;
     // ===== 安全日志字段（态势感知扩展）=====
     /** 源 IP（攻击源/访问源）*/

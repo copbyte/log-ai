@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import { Typography } from 'antd'
+import {
+  Button,
+  Drawer,
+  Empty,
+  List,
+  Pagination,
+  Spin,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+} from 'antd'
+import { HistoryOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { Message } from '@/types'
-import { streamMessage, emptyMessage } from '@/api/chat'
+import { streamMessage, emptyMessage, fetchChatHistory } from '@/api/chat'
+import type { ChatHistoryRecord } from '@/api/chat'
+import { fetchAuditLogs } from '@/api/security'
+import type { AuditLogItem } from '@/api/security'
+import { getUsername } from '@/api/auth'
 import MessageItem from './MessageItem'
 import InputBox from './InputBox'
 import QuickActions from './QuickActions'
@@ -26,6 +42,53 @@ export default function ChatWindow() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
+  // ===== 历史记录抽屉 =====
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [chatRecords, setChatRecords] = useState<ChatHistoryRecord[]>([])
+  const [chatTotal, setChatTotal] = useState(0)
+  const [chatPage, setChatPage] = useState(1)
+  const [chatLoading, setChatLoading] = useState(false)
+  const [queryRecords, setQueryRecords] = useState<AuditLogItem[]>([])
+  const [queryLoading, setQueryLoading] = useState(false)
+
+  const loadChatHistory = async (page: number) => {
+    setChatLoading(true)
+    try {
+      const data = await fetchChatHistory(page, 20)
+      setChatRecords(data.records)
+      setChatTotal(data.total)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '加载分析记录失败')
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  const loadQueryHistory = async () => {
+    setQueryLoading(true)
+    try {
+      // 只展示当前用户的日志查询/链路查询记录（审计按用户隔离）
+      const data = await fetchAuditLogs({
+        username: getUsername() ?? undefined,
+        size: 100,
+      })
+      setQueryRecords(
+        data.records.filter(
+          (r) => r.operation === 'LOG_QUERY' || r.operation === 'LOG_TRACE_QUERY',
+        ),
+      )
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '加载查询记录失败')
+    } finally {
+      setQueryLoading(false)
+    }
+  }
+
+  const openHistory = () => {
+    setHistoryOpen(true)
+    loadChatHistory(1)
+    loadQueryHistory()
+  }
 
   // 消息列表变化时滚动到底部
   useEffect(() => {
@@ -110,14 +173,22 @@ export default function ChatWindow() {
         style={{
           padding: '12px 16px',
           borderBottom: '1px solid var(--border-color, #f0f0f0)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
         }}
       >
-        <Title level={5} style={{ margin: 0 }}>
-          日志分析对话
-        </Title>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          基于 MCP + Spring AI · 自然语言查询日志
-        </Text>
+        <div>
+          <Title level={5} style={{ margin: 0 }}>
+            日志分析对话
+          </Title>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            基于 MCP + Spring AI · 自然语言查询日志
+          </Text>
+        </div>
+        <Button icon={<HistoryOutlined />} onClick={openHistory}>
+          历史记录
+        </Button>
       </div>
 
       <div
@@ -144,6 +215,131 @@ export default function ChatWindow() {
         onClear={handleClear}
         loading={loading}
       />
+
+      <Drawer
+        title="历史记录"
+        width={600}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        extra={
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              loadChatHistory(chatPage)
+              loadQueryHistory()
+            }}
+          >
+            刷新
+          </Button>
+        }
+      >
+        <Tabs
+          items={[
+            {
+              key: 'chat',
+              label: '分析记录',
+              children: (
+                <Spin spinning={chatLoading}>
+                  {chatRecords.length === 0 ? (
+                    <Empty description="暂无分析记录" style={{ padding: 32 }} />
+                  ) : (
+                    <>
+                      <List
+                        dataSource={chatRecords}
+                        renderItem={(item) => (
+                          <List.Item key={item.id}>
+                            <div style={{ width: '100%' }}>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  marginBottom: 4,
+                                }}
+                              >
+                                <Tag color={item.role === 'user' ? 'blue' : 'green'}>
+                                  {item.role === 'user' ? '我' : 'AI'}
+                                </Tag>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                  {item.createTime}
+                                </Text>
+                              </div>
+                              <div
+                                style={{
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  fontSize: 13,
+                                }}
+                              >
+                                {item.content}
+                              </div>
+                            </div>
+                          </List.Item>
+                        )}
+                      />
+                      <div style={{ textAlign: 'right', marginTop: 12 }}>
+                        <Pagination
+                          current={chatPage}
+                          pageSize={20}
+                          total={chatTotal}
+                          showSizeChanger={false}
+                          onChange={(p) => {
+                            setChatPage(p)
+                            loadChatHistory(p)
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </Spin>
+              ),
+            },
+            {
+              key: 'query',
+              label: '查询记录',
+              children: (
+                <Spin spinning={queryLoading}>
+                  {queryRecords.length === 0 ? (
+                    <Empty description="暂无查询记录" style={{ padding: 32 }} />
+                  ) : (
+                    <List
+                      dataSource={queryRecords}
+                      renderItem={(item) => (
+                        <List.Item key={item.id}>
+                          <div style={{ width: '100%' }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                marginBottom: 4,
+                              }}
+                            >
+                              <Tag color="cyan">
+                                {item.operation === 'LOG_QUERY'
+                                  ? '日志查询'
+                                  : '链路查询'}
+                              </Tag>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                {item.createTime}
+                              </Text>
+                            </div>
+                            <Typography.Paragraph
+                              type="secondary"
+                              style={{ marginBottom: 0, fontSize: 13 }}
+                              ellipsis={{ rows: 2, expandable: true, symbol: '展开' }}
+                            >
+                              {item.params || '无参数'}
+                            </Typography.Paragraph>
+                          </div>
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Spin>
+              ),
+            },
+          ]}
+        />
+      </Drawer>
     </div>
   )
 }

@@ -17,6 +17,8 @@ import java.util.Map;
  * 使用 MERGE INTO 实现 upsert（H2 兼容 MySQL 模式语法）。
  * <p>
  * 自行创建 H2 DataSource，避免与主 MySQL DataSource bean 冲突。
+ * 注意：不要把 H2 连接暴露成 Spring DataSource Bean，否则 Spring Boot 会因
+ * "已存在 DataSource Bean" 而跳过主 MySQL 数据源自动配置，导致 MyBatis 全部写入 H2。
  */
 @Slf4j
 @Repository

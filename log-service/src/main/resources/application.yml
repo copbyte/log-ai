@@ -5,10 +5,39 @@ spring:
   application:
     name: log-service
   datasource:
-    url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/log_monitor?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    # rewriteBatchedStatements=true: MySQL 驱动将批量 INSERT 合并为多值 INSERT，让 saveBatch 真正批量执行
     # driver-class-name 已删除：Spring Boot 可从 jdbc url 自动推断
     username: root
     password: "123456"
+  kafka:
+    # Kafka 地址：本地/云服务器均可，可用环境变量 KAFKA_BOOTSTRAP_SERVERS 覆盖
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:82.156.4.200:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # acks=all：副本全部确认才认为发送成功，配合文件偏移量推进保证不丢
+      acks: all
+      retries: 3
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # 关闭自动提交，由 KafkaLogConsumer 入库成功后手动 ack（at-least-once）
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      max-poll-records: 1000
+    listener:
+      # 批量消费 + 手动确认
+      type: batch
+      ack-mode: manual
+      # 主题不存在时不阻断启动（服务端已开启自动建主题）
+      missing-topics-fatal: false
+  data:
+    redis:
+      # Redis 地址：可用环境变量 REDIS_HOST 覆盖
+      host: ${REDIS_HOST:82.156.4.200}
+      port: 6379
+      timeout: 3s
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
@@ -41,6 +70,70 @@ log:
     enabled: true
     port: 5140
     buffer-size: 5000
-  # 模拟安全日志生成器（面试演示用，生产环境关闭）
+  # 模拟安全日志生成器（演示用，生产环境关闭）
   simulator:
     enabled: true
+  pipeline:
+    # kafka：采集端 -> Kafka -> 消费端批量入库（生产模式）
+    # direct：直接批量入库（无 Kafka 的本地演示降级模式）
+    mode: kafka
+    topic: log-entry
+    group-id: log-service-consumer
+    concurrency: 1
+    batch-size: 500
+  rule-engine:
+    streaming:
+      # true：日志入库后实时判定规则（Redis 窗口计数，推荐）
+      # false：回退每分钟 SQL 扫描的规则引擎
+      enabled: true
+      # 启用规则缓存刷新间隔
+      rule-refresh-interval-ms: 30000
+  storage:
+    es:
+      # true：日志入库 MySQL 的同时批量写入 ES（双写，ES 故障不影响 MySQL）
+      enabled: true
+      uris: ${ES_URIS:http://82.156.4.200:9200}
+      index-prefix: log-entry
+      batch-size: 500
+
+app:
+  security:
+    # 认证开关：true 启用 JWT 认证（前端需登录，mcp-server 用服务令牌）；false 关闭（本地演示）
+    enabled: true
+    # JWT 签名密钥（HS256，至少 32 字节），生产通过环境变量 JWT_SECRET 注入
+    jwt-secret: ${JWT_SECRET:log-ai-demo-secret-change-me-in-production-2026}
+    # Token 有效期（秒）
+    token-expire-seconds: 7200
+    # 服务间调用令牌（mcp-server -> log-service），生产通过 LOG_SERVICE_TOKEN 注入
+    service-token: ${LOG_SERVICE_TOKEN:service-token-demo}
+    users:
+      - username: admin
+        # {noop} 明文仅用于演示，生产请改为 {bcrypt} 前缀的 BCrypt 哈希
+        password: "{noop}123456"
+    # 日志内容敏感信息脱敏（password/token/手机号/身份证）
+    mask-sensitive: true
+  audit:
+    # 关键操作审计开关（登录/查询/告警处理/规则变更/AI 调用）
+    enabled: true
+
+management:
+  health:
+    elasticsearch:
+      # 禁用 Boot 自动 ES 指示器（它连 localhost:9200 必然失败）；
+      # 改用自定义 EsHealthIndicator，指向真实 ES 地址
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        # 只暴露健康检查，其余 actuator 端点不对外
+        include: health
+  endpoint:
+    health:
+      show-details: always
+      group:
+        # 就绪：依赖组件（DB/Redis/Kafka/ES）全部正常才算 Ready，供 K8s readinessProbe
+        readiness:
+          include: db,redis,kafka,es
+        # 存活：进程活着即可，供 K8s livenessProbe
+        liveness:
+          include: ping
