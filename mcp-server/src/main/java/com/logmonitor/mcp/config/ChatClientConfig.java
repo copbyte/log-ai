@@ -17,9 +17,11 @@ public class ChatClientConfig {
 
     @Bean
     public ToolCallbackProvider logAnalysisToolProvider(LogAnalysisTools tools) {
-        return MethodToolCallbackProvider.builder()
+        ToolCallbackProvider provider = MethodToolCallbackProvider.builder()
                 .toolObjects(tools)
                 .build();
+        // 包装一层：把请求级用户 JWT 透传给工具调用（AI 发起的查询按用户审计）
+        return new AuthAwareToolCallbackProvider(provider);
     }
 
     @Bean

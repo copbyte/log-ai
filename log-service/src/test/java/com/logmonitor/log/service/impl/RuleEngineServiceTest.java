@@ -8,10 +8,10 @@ import com.logmonitor.common.entity.Rule;
 import com.logmonitor.log.mapper.AlertMapper;
 import com.logmonitor.log.mapper.LogEntryMapper;
 import com.logmonitor.log.mapper.RuleMapper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.apache.ibatis.builder.MapperBuilderAssistant;
 
 import java.time.LocalDateTime;
 import java.util.List;

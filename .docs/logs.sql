@@ -2,6 +2,11 @@
 -- AI日志分析平台 v2.0 数据库初始化脚本
 -- 数据库：log_monitor
 -- 基于 MCP Agent 架构，支持日志检索、异常聚类、根因定位
+--
+-- 完整初始化顺序（必须按序执行）：
+--   1. logs.sql               基础表 + Mock 数据（本脚本）
+--   2. log_entry_indexes.sql  查询复合索引
+--   3. sa_schema.sql          态势感知扩展：安全字段/规则表/告警表/审计表/预置规则
 -- ================================================
 
 CREATE DATABASE IF NOT EXISTS log_monitor DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

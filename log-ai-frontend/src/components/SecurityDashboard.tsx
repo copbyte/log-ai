@@ -268,6 +268,34 @@ export default function SecurityDashboard() {
                 rowKey="id"
                 columns={columns}
                 dataSource={alerts}
+                expandable={{
+                  expandedRowRender: (record) => (
+                    <div style={{ padding: '8px 16px', wordBreak: 'break-word' }}>
+                      <Typography.Text strong>规则名称：</Typography.Text>
+                      {record.ruleName}
+                      <br />
+                      <Typography.Text strong>源 IP：</Typography.Text>
+                      {record.srcIp || '-'}
+                      <br />
+                      <Typography.Text strong>状态：</Typography.Text>
+                      {statusLabel(record.status)}
+                      <br />
+                      <Typography.Text strong>时间：</Typography.Text>
+                      {record.createTime}
+                      <br />
+                      <Typography.Text strong>完整内容：</Typography.Text>
+                      <div
+                        style={{
+                          marginTop: 4,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {record.content}
+                      </div>
+                    </div>
+                  ),
+                }}
                 pagination={{
                   current: page,
                   pageSize,

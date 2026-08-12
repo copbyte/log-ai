@@ -4,7 +4,7 @@ import com.logmonitor.common.entity.LogEntry;
 import com.logmonitor.log.parser.CEFParser;
 import com.logmonitor.log.parser.LogParser;
 import com.logmonitor.log.parser.SyslogParser;
-import com.logmonitor.log.service.LogEntryService;
+import com.logmonitor.log.pipeline.LogPipeline;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
  * UDP Syslog 采集器
  * <p>
  * 监听 UDP 端口（默认 5140），接收防火墙/IDS 等网络设备发送的 syslog 日志，
- * 解析后批量入库。用有界队列缓冲，防止 OOM。
+ * 解析后通过日志管道（Kafka/直连）落库。用有界队列缓冲，防止 OOM。
  */
 @Slf4j
 @Service
@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit;
 @ConditionalOnProperty(name = "log.syslog.enabled", havingValue = "true")
 public class SyslogServerService {
 
-    private final LogEntryService logEntryService;
+    private final LogPipeline logPipeline;
 
     @Value("${log.syslog.port:5140}")
     private int port;
@@ -66,7 +66,7 @@ public class SyslogServerService {
             listenerThread.setDaemon(true);
             listenerThread.start();
 
-            // 消费线程（批量入库）
+            // 消费线程（批量落库）
             consumerThread = new Thread(this::consume, "syslog-consumer");
             consumerThread.setDaemon(true);
             consumerThread.start();
@@ -112,7 +112,7 @@ public class SyslogServerService {
         }
     }
 
-    /** 消费队列，批量入库 */
+    /** 消费队列，批量管道落库；失败放回队列重试 */
     private void consume() {
         List<LogEntry> batch = new ArrayList<>(500);
         while (running || !buffer.isEmpty()) {
@@ -125,16 +125,32 @@ public class SyslogServerService {
                     buffer.drainTo(batch, 499);
                 }
                 if (!batch.isEmpty()) {
-                    logEntryService.saveBatch(batch, 500);
-                    log.debug("Syslog 批量入库 {} 条", batch.size());
-                    batch.clear();
+                    try {
+                        logPipeline.persist(batch);
+                        log.debug("Syslog 管道落库 {} 条", batch.size());
+                    } catch (Exception e) {
+                        log.error("Syslog 管道写入失败，放回队列重试: {}", e.getMessage());
+                        requeue(batch);
+                    } finally {
+                        batch.clear();
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("Syslog 入库失败: {}", e.getMessage());
+                log.error("Syslog 消费异常: {}", e.getMessage());
                 batch.clear();
+            }
+        }
+    }
+
+    /** 写入失败时放回缓冲队列，下次消费重试（队列满则丢弃并告警） */
+    private void requeue(List<LogEntry> batch) {
+        for (LogEntry entry : batch) {
+            if (!buffer.offer(entry)) {
+                log.warn("Syslog 重试队列已满，丢弃日志: {}", entry.getContent());
+                break;
             }
         }
     }

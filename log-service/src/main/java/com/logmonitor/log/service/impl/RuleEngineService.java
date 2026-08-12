@@ -10,6 +10,7 @@ import com.logmonitor.log.mapper.LogEntryMapper;
 import com.logmonitor.log.mapper.RuleMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -29,10 +30,14 @@ import java.util.stream.Collectors;
  *   <li>THRESHOLD：聚合下推 SQL（GROUP BY src_ip + HAVING COUNT &gt;= threshold），不再把窗口内全部日志加载到内存；</li>
  *   <li>幂等：alert 表 (rule_id, log_entry_id) 唯一索引兜底，防止并发/重试产生重复告警。</li>
  * </ul>
+ * <p>
+ * 启用流式规则引擎（log.rule-engine.streaming.enabled=true）时本类不创建，
+ * 告警由 StreamingRuleEngine 在日志入库后实时判定；此处作为每分钟 SQL 扫描的降级方案。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "log.rule-engine.streaming.enabled", havingValue = "false", matchIfMissing = true)
 public class RuleEngineService {
 
     private final RuleMapper ruleMapper;

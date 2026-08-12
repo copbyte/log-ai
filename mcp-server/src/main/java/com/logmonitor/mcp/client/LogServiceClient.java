@@ -1,12 +1,18 @@
 package com.logmonitor.mcp.client;
 
+import com.logmonitor.mcp.context.UserAuthContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriBuilder;
 
 import java.net.URI;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -19,9 +25,16 @@ import java.util.function.Consumer;
 public class LogServiceClient {
 
     private final RestClient restClient;
+    private final String serviceToken;
 
-    public LogServiceClient(@Value("${log-service.url}") String baseUrl) {
-        this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+    public LogServiceClient(@Value("${log-service.url}") String baseUrl,
+                            @Value("${log-service.token:service-token-demo}") String serviceToken) {
+        // 服务间调用令牌：与 log-service 的 app.security.service-token 保持一致
+        this.serviceToken = serviceToken;
+        this.restClient = RestClient.builder()
+                .baseUrl(baseUrl)
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + serviceToken)
+                .build();
     }
 
     /**
@@ -40,6 +53,7 @@ public class LogServiceClient {
                     if (serviceName != null) uriBuilder.queryParam("serviceName", serviceName);
                     return uriBuilder.build();
                 })
+                .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization()))
                 .retrieve()
                 .body(Map.class);
     }
@@ -51,6 +65,7 @@ public class LogServiceClient {
     public List<Map<String, Object>> getLogsByTraceId(String traceId) {
         Map<String, Object> response = restClient.get()
                 .uri("/api/log/trace/{traceId}", traceId)
+                .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization()))
                 .retrieve()
                 .body(Map.class);
         Object data = response.get("data");
@@ -66,6 +81,7 @@ public class LogServiceClient {
     public Map<String, Object> getLogById(Long id) {
         return restClient.get()
                 .uri("/api/log/entries/{id}", id)
+                .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization()))
                 .retrieve()
                 .body(Map.class);
     }
@@ -76,6 +92,7 @@ public class LogServiceClient {
     public Map<String, Object> getAlertStats() {
         return restClient.get()
                 .uri("/api/alert/stats")
+                .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization()))
                 .retrieve()
                 .body(Map.class);
     }
@@ -93,6 +110,7 @@ public class LogServiceClient {
                     if (severity != null) uriBuilder.queryParam("severity", severity);
                     return uriBuilder.build();
                 })
+                .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization()))
                 .retrieve()
                 .body(Map.class);
     }
@@ -111,7 +129,96 @@ public class LogServiceClient {
                     if (action != null) uriBuilder.queryParam("action", action);
                     return uriBuilder.build();
                 })
+                .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization()))
                 .retrieve()
                 .body(Map.class);
+    }
+
+    /**
+     * 上报 AI 调用审计到 log-service（失败不影响对话，仅记 WARN）
+     *
+     * @param userAuthorization 前端透传的 Bearer JWT（可为 null）；非空时用它调用 log-service，
+     *                          由 log-service 验签后记录真实操作用户，避免所有 AI 审计都记成 service
+     */
+    public void sendAudit(String operation, String username, String params, String result, String errorMessage,
+                          String userAuthorization) {
+        try {
+            Map<String, Object> body = new HashMap<>();
+            body.put("operation", operation);
+            body.put("username", username);
+            body.put("params", params);
+            body.put("result", result);
+            body.put("errorMessage", errorMessage);
+            restClient.post()
+                    .uri("/api/audit")
+                    // 覆盖默认的服务令牌：前端 JWT 有效时按真实用户审计，否则回退服务身份
+                    .headers(h -> h.set(HttpHeaders.AUTHORIZATION, resolveAuthorization(userAuthorization)))
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.warn("上报审计到 log-service 失败: {}", e.getMessage());
+        }
+    }
+
+    /** 优先使用前端 JWT，缺失时回退为服务间令牌 */
+    private String resolveAuthorization(String userAuthorization) {
+        if (userAuthorization != null && userAuthorization.startsWith("Bearer ")) {
+            return userAuthorization;
+        }
+        return "Bearer " + serviceToken;
+    }
+
+    /** 工具调用场景：优先使用工具上下文中的用户 JWT，否则回退服务令牌 */
+    private String resolveAuthorization() {
+        String userAuth = UserAuthContext.get();
+        if (userAuth != null && userAuth.startsWith("Bearer ")) {
+            return userAuth;
+        }
+        return "Bearer " + serviceToken;
+    }
+
+    /**
+     * 保存一段对话历史（用户问题 + AI 回答）到 log-service，按透传 JWT 归属用户。
+     * 无用户 JWT（如 MCP 客户端直接调用）不保存，避免混入 service 共享桶；失败不影响对话。
+     */
+    public void saveChatHistory(List<Map<String, String>> messages, String userAuthorization) {
+        if (userAuthorization == null || !userAuthorization.startsWith("Bearer ")) {
+            log.debug("无用户 JWT，跳过对话历史保存");
+            return;
+        }
+        try {
+            Map<String, Object> body = new HashMap<>();
+            body.put("messages", messages);
+            restClient.post()
+                    .uri("/api/chat-history/batch")
+                    .headers(h -> h.set(HttpHeaders.AUTHORIZATION, userAuthorization))
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.warn("保存对话历史到 log-service 失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 分页查询当前用户对话历史（透传用户 JWT，由 log-service 按登录态隔离数据）。
+     */
+    public Map<String, Object> getChatHistory(int page, int size, String userAuthorization) {
+        if (userAuthorization == null || !userAuthorization.startsWith("Bearer ")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未认证或登录已过期");
+        }
+        try {
+            return restClient.get()
+                    .uri(uriBuilder -> uriBuilder.path("/api/chat-history")
+                            .queryParam("page", page)
+                            .queryParam("size", size)
+                            .build())
+                    .headers(h -> h.set(HttpHeaders.AUTHORIZATION, userAuthorization))
+                    .retrieve()
+                    .body(Map.class);
+        } catch (HttpClientErrorException.Unauthorized e) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未认证或登录已过期");
+        }
     }
 }

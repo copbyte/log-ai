@@ -1,7 +1,7 @@
 package com.logmonitor.log.service.impl;
 
 import com.logmonitor.common.entity.LogEntry;
-import com.logmonitor.log.service.LogEntryService;
+import com.logmonitor.log.pipeline.LogPipeline;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -25,7 +25,7 @@ import java.util.Random;
 @ConditionalOnProperty(name = "log.simulator.enabled", havingValue = "true")
 public class SecurityLogSimulator {
 
-    private final LogEntryService logEntryService;
+    private final LogPipeline logPipeline;
 
     private final Random random = new Random();
 
@@ -56,8 +56,12 @@ public class SecurityLogSimulator {
         }
 
         if (!batch.isEmpty()) {
-            logEntryService.saveBatch(batch, 500);
-            log.info("模拟安全日志生成 {} 条", batch.size());
+            try {
+                logPipeline.persist(batch);
+                log.info("模拟安全日志生成 {} 条", batch.size());
+            } catch (Exception e) {
+                log.error("模拟安全日志管道写入失败: {}", e.getMessage());
+            }
         }
     }
 

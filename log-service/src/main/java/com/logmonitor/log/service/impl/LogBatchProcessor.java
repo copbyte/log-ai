@@ -16,7 +16,7 @@ import java.util.List;
  * <ul>
  *   <li>WebSocket 实时日志推送（前端实时流）</li>
  *   <li>RabbitMQ / Kafka 消息分发</li>
- *   <li>批次级 AI 分析、告警触发等后置任务</li>
+ *   <li>批次级 AI 分析、告警触发等后置任务（当前已接入流式规则引擎）</li>
  * </ul>
  * 线程池参数（核心/最大线程数、队列容量、拒绝策略）见 AsyncConfig#logBatchExecutor。
  */
@@ -24,8 +24,14 @@ import java.util.List;
 @Component
 public class LogBatchProcessor {
 
+    private final StreamingRuleEngine streamingRuleEngine;
+
+    public LogBatchProcessor(StreamingRuleEngine streamingRuleEngine) {
+        this.streamingRuleEngine = streamingRuleEngine;
+    }
+
     /**
-     * 异步批量处理日志条目（当前为空实现，预留扩展）
+     * 异步批量处理日志条目：目前接入流式规则引擎，在日志入库后实时判定规则并生成告警
      * <p>
      * 在独立线程池中执行，不阻塞 FileWatchService 主轮询线程的下一次文件扫描。
      *
@@ -33,6 +39,7 @@ public class LogBatchProcessor {
      */
     @Async("logBatchExecutor")
     public void processBatchAsync(List<LogEntry> entries) {
-        // 预留：WebSocket 推送 / MQ 分发 / AI 分析等批次后置逻辑在此实现
+        // 批次后置处理：流式规则引擎（Redis 窗口计数）实时告警
+        streamingRuleEngine.processBatch(entries);
     }
 }

@@ -32,15 +32,33 @@ export default function InputBox({
   return (
     <div style={{ borderTop: '1px solid var(--border-color, #f0f0f0)', padding: 12 }}>
       <Space.Compact style={{ width: '100%', alignItems: 'stretch' }}>
-        <TextArea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder ?? '输入你的问题，例如：搜索最近 ERROR 日志'}
-          autoSize={{ minRows: 1, maxRows: 6 }}
-          style={{ borderRadius: '8px 0 0 8px' }}
-          disabled={loading}
-        />
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <TextArea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder ?? '输入你的问题，例如：搜索最近 ERROR 日志'}
+            maxLength={1000}
+            autoSize={{ minRows: 1, maxRows: 6 }}
+            style={{ borderRadius: '8px 0 0 8px' }}
+            disabled={loading}
+          />
+          {/* 计数在输入框内部右下角：绝对定位，不改变输入框尺寸，也不在外部占行 */}
+          <span
+            style={{
+              position: 'absolute',
+              right: 10,
+              bottom: 4,
+              fontSize: 11,
+              lineHeight: 1,
+              opacity: 0.55,
+              color: value.length >= 1000 ? '#ff4d4f' : 'inherit',
+              pointerEvents: 'none',
+            }}
+          >
+            {value.length}/1000
+          </span>
+        </div>
         <Button
           type="primary"
           icon={<SendOutlined />}

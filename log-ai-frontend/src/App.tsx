@@ -1,6 +1,10 @@
-import { Layout, Tabs, Typography } from 'antd'
-import { RobotOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
+import { Button, Layout, Space, Tabs, Typography } from 'antd'
+import { LogoutOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons'
+import { clearToken, clearUsername, getToken, getUsername } from '@/api/auth'
+import AuditLogPanel from '@/components/AuditLogPanel'
 import ChatWindow from '@/components/ChatWindow'
+import LoginCard from '@/components/LoginCard'
 import SecurityDashboard from '@/components/SecurityDashboard'
 import ThemeToggle from '@/components/ThemeToggle'
 import type { ThemeMode } from '@/hooks/useTheme'
@@ -15,6 +19,33 @@ interface Props {
 
 /** 应用主体：顶部标题栏 + 内容区（AI 对话 / 安全态势 切换） */
 export default function App({ mode, onToggleTheme }: Props) {
+  const [authed, setAuthed] = useState<boolean>(() => !!getToken())
+  const [username, setUsername] = useState<string>(() => getUsername() ?? '')
+
+  useEffect(() => {
+    // 401 时后端令牌失效，回到登录页
+    const onExpired = () => setAuthed(false)
+    window.addEventListener('auth:expired', onExpired)
+    return () => window.removeEventListener('auth:expired', onExpired)
+  }, [])
+
+  if (!authed) {
+    return (
+      <LoginCard
+        onSuccess={(name) => {
+          setUsername(name)
+          setAuthed(true)
+        }}
+      />
+    )
+  }
+
+  const handleLogout = () => {
+    clearToken()
+    clearUsername()
+    setAuthed(false)
+  }
+
   return (
     <Layout style={{ height: '100vh' }}>
       <Header
@@ -32,7 +63,21 @@ export default function App({ mode, onToggleTheme }: Props) {
             Log Monitor AI
           </Title>
         </div>
-        <ThemeToggle mode={mode} onToggle={onToggleTheme} />
+        <Space>
+          <span style={{ color: 'var(--header-fg, #fff)' }}>
+            <UserOutlined style={{ marginRight: 6 }} />
+            {username || 'admin'}
+          </span>
+          <Button
+            type="text"
+            icon={<LogoutOutlined />}
+            onClick={handleLogout}
+            style={{ color: 'var(--header-fg, #fff)' }}
+          >
+            退出
+          </Button>
+          <ThemeToggle mode={mode} onToggle={onToggleTheme} />
+        </Space>
       </Header>
       <Content style={{ background: 'var(--content-bg, #f5f5f5)' }}>
         <Tabs
@@ -44,6 +89,7 @@ export default function App({ mode, onToggleTheme }: Props) {
           items={[
             { key: 'chat', label: 'AI 日志分析', children: <ChatWindow /> },
             { key: 'security', label: '安全态势', children: <SecurityDashboard /> },
+            { key: 'audit', label: '审计日志', children: <AuditLogPanel /> },
           ]}
         />
         {/* 让 Tabs 内容区撑满高度：对话页内部滚动，态势大屏内部滚动 */}

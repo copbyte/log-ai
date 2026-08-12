@@ -6,6 +6,10 @@ package com.logmonitor.common.enums;
 public enum LogSource {
     /** 文件监控采集 */
     FILE,
+    /** Syslog/网络设备日志采集 */
+    SYSLOG,
+    /** CEF 格式安全日志（Syslog 载体） */
+    CEF,
     /** API 主动上报 */
     HTTP,
     /** Elasticsearch (ELK) 适配 */
