@@ -16,6 +16,7 @@ export default function ThemeToggle({ mode, onToggle }: Props) {
         type="text"
         icon={isDark ? <SunOutlined /> : <MoonOutlined />}
         onClick={onToggle}
+        style={{ color: 'var(--header-fg, #fff)' }}
       />
     </Tooltip>
   )

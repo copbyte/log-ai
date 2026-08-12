@@ -1,6 +1,7 @@
 # Log Monitor AI Platform
 
-> **当前分支：log-ai-SA（态势感知增强版）**
+[English](README.en.md) | [中文](README.md)
+
 
 基于 MCP 协议的日志分析 Agent 平台。平台将日志检索、链路追踪、异常聚类、根因定位封装为 AI 可调用工具，支持自然语言对话式日志分析，并提供安全态势感知、生产级日志管道、ES 全文检索、认证审计、健康检查与对话历史持久化能力。
 
@@ -15,7 +16,13 @@
 - MCP 协议：日志分析能力通过 MCP Server 暴露，Cursor / Claude Desktop 等 AI 应用可作为 MCP Client 接入
 - 可视化展示：TraceID 链路时间线、异常聚类柱状图、Markdown 渲染
 
-### 1.2 安全态势感知
+### 1.2 系统截图
+
+**登录页**：JWT 认证入口，支持多用户隔离。
+
+![登录页](.docs/image/login.png)
+
+### 1.3 安全态势感知
 
 - Syslog 采集：UDP 5140 端口接收 Syslog / CEF 格式安全日志
 - 流式规则引擎：日志入库后基于 Redis 实时判定规则，MATCH 规则幂等去重、THRESHOLD 规则时间窗口计数
@@ -23,7 +30,7 @@
 - AI 安全分析：detectAnomalies（异常行为检测）、correlateEvents（攻击链关联分析）
 - 模拟日志生成器：自动生成模拟攻击日志，便于演示
 
-### 1.3 平台能力
+### 1.4 平台能力
 
 - Kafka 日志管道：采集端 → Kafka 削峰 → 消费端批量入库，发送成功才推进文件偏移量（at-least-once）
 - 多源日志：FILE（文件监控）/ SYSLOG / CEF / HTTP / ELK / LOKI / MOCK
@@ -132,6 +139,27 @@ sequenceDiagram
     L->>E: 双写 ES（按天索引）
     L->>L: 流式规则引擎（Redis 窗口）
 ```
+
+### 2.4 安全态势大屏
+
+基于规则引擎 + AI 异常检测的实时 SOC 视图：告警统计、告警列表、攻击源 IP 排行、24 小时告警趋势。
+
+![态势大屏-告警统计与攻击源排行](.docs/image/dashboard-stats.png)
+![态势大屏-告警列表与24h趋势](.docs/image/dashboard-trend.png)
+
+**核心模块**：
+
+- 告警统计卡片：总数 / 待处理 / 高危 / 已解决
+- 告警列表：严重级别 / 规则名称 / 源 IP / 内容 / 状态 / 操作
+- 攻击源 IP 排行：Top 10 高频攻击源
+- 24 小时告警趋势：时序折线图，30 秒自动刷新
+- 状态流转：确认 / 解决 / 一键操作
+
+**支撑能力**：
+
+- 规则引擎：THRESHOLD（阈值）+ MATCH（匹配）双模式
+- AI 安全分析：detectAnomalies 工具（高频 IP / SQL 注入 / XSS / 暴力破解）
+- 攻击链还原：correlateEvents 工具（按源 IP 关联多步行为）
 
 ## 3. 模块说明
 
@@ -298,14 +326,63 @@ log-ai-frontend/src/
 └── main.tsx
 ```
 
+**界面预览**
+
+自然语言查询日志，支持浅色/深色主题切换。
+
+![AI 日志分析-浅色](.docs/image/chat-light.png)
+![AI 日志分析-深色](.docs/image/chat-dark.png)
+
+**核心能力**：
+
+- 自然语言查询（中文/英文）
+- 4 个快捷查询按钮（查 ERROR / 异常聚类 / 按 TraceID 查链路 / 根因定位）
+- Markdown 渲染、工具块可视化（TraceTimeline / ClusterChart）
+- SSE 流式响应，逐字显示
+- 对话历史持久化（按用户隔离）
+
+**工具调用效果展示**
+
+用户用自然语言提问"对最近的异常做聚类分析"，AI 自动调用 `clusterExceptions` 工具，返回结构化分析报告：
+
+![AI 异常聚类分析报告](.docs/image/chat-analysis.png)
+
+报告包含：
+
+- 统计概览（共 6 类异常、50+ 条日志、来源 WAF 服务）
+- 按异常类型分组的排名表（SQL 注入 / XSS / 攻击类别）
+- 攻击类别汇总（SQL 注入 29 次 58%、XSS 跨站脚本 21 次 42%）
+- 结论性分析（攻击面集中在 WAF 层、SQL 注入为主要方向、攻击具有探测+利用特征）
+- 后续分析建议（关联分析 / 异常检测 / 详细日志）
+
+**安全审计日志**
+
+通过 `@AuditLog` 注解 + AOP 切面自动记录所有敏感操作，支持按操作类型、用户、结果、IP 筛选。
+
+![安全审计日志](.docs/image/audit-log.png)
+
+**核心能力**：
+
+- 自动记录：登录、AI 对话、日志查询等敏感操作
+- 敏感信息脱敏：密码字段在审计日志中显示为 `******`
+- 多维筛选：操作类型 / 用户名 / 时间范围
+- 来源 IP 追踪：定位操作来源
+- 失败原因：记录操作失败原因
+
+**技术实现**：
+
+- 切面：[AuditLogAspect.java](log-service/src/main/java/com/logmonitor/log/audit/AuditLogAspect.java)
+- 注解：`@AuditLog(operation = "AI_CHAT_STREAM", sensitive = true)`
+- 持久化：MySQL `audit_log` 表
+
 ## 4. 数据库
 
 ### 4.1 初始化顺序（必须按序执行）
 
 ```bash
-mysql -u root -p < .docs/logs.sql                # 1. 基础表 + Mock 数据
-mysql -u root -p log_monitor < .docs/log_entry_indexes.sql  # 2. 复合索引
-mysql -u root -p log_monitor < .docs/sa_schema.sql          # 3. 安全/规则/告警/审计/历史表
+mysql -u root -p < .docs/sql/logs.sql                # 1. 基础表 + Mock 数据
+mysql -u root -p log_monitor < .docs/sql/log_entry_indexes.sql  # 2. 复合索引
+mysql -u root -p log_monitor < .docs/sql/sa_schema.sql          # 3. 安全/规则/告警/审计/历史表
 ```
 
 ### 4.2 表说明
@@ -346,9 +423,9 @@ export ES_URIS=http://your-es:9200
 
 ```bash
 mysql -u root -p -e "CREATE DATABASE log_monitor DEFAULT CHARSET utf8mb4;"
-mysql -u root -p log_monitor < .docs/logs.sql
-mysql -u root -p log_monitor < .docs/log_entry_indexes.sql
-mysql -u root -p log_monitor < .docs/sa_schema.sql
+mysql -u root -p log_monitor < .docs/sql/logs.sql
+mysql -u root -p log_monitor < .docs/sql/log_entry_indexes.sql
+mysql -u root -p log_monitor < .docs/sql/sa_schema.sql
 ```
 
 **2. 启动 log-service（:8081）**
