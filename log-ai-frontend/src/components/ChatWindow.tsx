@@ -21,6 +21,7 @@ import { getUsername } from '@/api/auth'
 import MessageItem from './MessageItem'
 import InputBox from './InputBox'
 import QuickActions from './QuickActions'
+import { useVoiceAssistant } from '@/hooks/useVoiceAssistant'
 
 const { Title, Text } = Typography
 
@@ -96,6 +97,13 @@ export default function ChatWindow() {
       listRef.current.scrollTop = listRef.current.scrollHeight
     }
   }, [messages])
+
+  // ===== 语音助手 =====
+  // AI 识别完成后把文字填入输入框（用户可确认/修改后再发送）
+  const { state: voiceState, start: voiceStart, stop: voiceStop, isSupported: voiceSupported } =
+    useVoiceAssistant((text) => {
+      setInput(text)
+    })
 
   const handleSend = async () => {
     const text = input.trim()
@@ -214,6 +222,9 @@ export default function ChatWindow() {
         onSend={handleSend}
         onClear={handleClear}
         loading={loading}
+        voiceState={voiceState}
+        voiceSupported={voiceSupported}
+        onVoiceToggle={() => (voiceState === 'idle' ? voiceStart() : voiceStop())}
       />
 
       <Drawer

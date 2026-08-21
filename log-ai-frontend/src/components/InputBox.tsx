@@ -1,5 +1,6 @@
 import { Input, Button, Space } from 'antd'
-import { SendOutlined, ClearOutlined } from '@ant-design/icons'
+import { SendOutlined, ClearOutlined, AudioOutlined } from '@ant-design/icons'
+import type { VoiceState } from '@/hooks/useVoiceAssistant'
 
 const { TextArea } = Input
 
@@ -10,6 +11,18 @@ interface Props {
   onClear: () => void
   loading: boolean
   placeholder?: string
+  // 语音助手（可选：不传则隐藏麦克风按钮）
+  voiceState?: VoiceState
+  voiceSupported?: boolean
+  onVoiceToggle?: () => void
+}
+
+const VOICE_LABEL: Record<VoiceState, string> = {
+  idle: '语音',
+  listening: '聆听中…',
+  wake: '已唤醒',
+  processing: '思考中…',
+  speaking: '播报中…',
 }
 
 /** 输入框 + 发送按钮（Enter 发送，Shift+Enter 换行） */
@@ -20,6 +33,9 @@ export default function InputBox({
   onClear,
   loading,
   placeholder,
+  voiceState,
+  voiceSupported,
+  onVoiceToggle,
 }: Props) {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter 发送，Shift+Enter 换行
@@ -59,6 +75,19 @@ export default function InputBox({
             {value.length}/1000
           </span>
         </div>
+        {/* 语音按钮：只在父组件传入 voice props 时显示 */}
+        {onVoiceToggle && (
+          <Button
+            icon={<AudioOutlined />}
+            onClick={onVoiceToggle}
+            danger={voiceState !== undefined && voiceState !== 'idle'}
+            disabled={!voiceSupported || loading}
+            title="语音对话（需授权麦克风）"
+            style={{ borderRadius: 8, marginRight: 8 }}
+          >
+            {VOICE_LABEL[voiceState ?? 'idle']}
+          </Button>
+        )}
         <Button
           type="primary"
           icon={<SendOutlined />}

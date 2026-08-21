@@ -45,3 +45,9 @@ management:
   endpoint:
     health:
       show-details: always
+voice:
+  # 注意：路径是相对"进程工作目录"解析的。
+  # IDEA 里运行 mcp-server 时工作目录默认是项目根 D:\zyjk\log-ai，所以要用 ./mcp-server/models/...
+  # 若在 mcp-server 目录下用命令行启动（mvn spring-boot:run），则改成 ./models/vosk-model-small-cn-0.22
+  model-path: ./mcp-server/models/vosk-model-small-cn-0.22
+  wake-word: 小日

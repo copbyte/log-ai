@@ -20,6 +20,12 @@ export default defineConfig({
         target: 'http://localhost:8082',
         changeOrigin: true,
       },
+      // 语音 WebSocket：前端连 ws://localhost:3000/ws/voice，由 Vite 转发到 8082
+      '/ws': {
+        target: 'ws://localhost:8082',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 })
